@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentMemory 记忆银行 · 架构白皮书</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --border: #e3e8ef;
+    --txt: #1f2937;
+    --txt2: #5b6b81;
+    --txt3: #8b98ab;
+    --blue: #2563eb;
+    --blue-soft: #eaf1fe;
+    --violet: #7c5cff;
+    --green: #059669;
+    --green-soft: #e7f6f0;
+    --amber: #d97706;
+    --amber-soft: #fdf3e3;
+    --red: #dc2626;
+    --radius: 12px;
+    --shadow: 0 1px 3px rgba(16,24,40,.06), 0 1px 2px rgba(16,24,40,.04);
+    --shadow-hover: 0 10px 28px rgba(16,24,40,.1);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--bg); color: var(--txt); font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; line-height: 1.75; font-size: 15px; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 28px; }
+
+  /* ================= Hero ================= */
+  .hero {
+    position: relative; overflow: hidden;
+    padding: 84px 0 56px; text-align: center;
+    border-radius: 0 0 28px 28px;
+    background:
+      radial-gradient(ellipse 70% 90% at 18% -10%, rgba(37,99,235,.16), transparent 60%),
+      radial-gradient(ellipse 60% 80% at 85% 10%, rgba(124,92,255,.14), transparent 55%),
+      radial-gradient(ellipse 40% 50% at 55% 120%, rgba(5,150,105,.10), transparent 60%),
+      linear-gradient(180deg, #ffffff, #f0f4fb);
+  }
+  .hero::before {
+    content: ""; position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(37,99,235,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(37,99,235,.05) 1px, transparent 1px);
+    background-size: 34px 34px;
+    mask-image: radial-gradient(ellipse 75% 70% at 50% 0%, black 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 75% 70% at 50% 0%, black 30%, transparent 75%);
+    pointer-events: none;
+  }
+  .hero .orb { position: absolute; border-radius: 50%; filter: blur(2px); opacity: .5; pointer-events: none; }
+  .orb1 { width: 180px; height: 180px; top: -60px; left: 8%; background: radial-gradient(circle, rgba(37,99,235,.25), transparent 70%); }
+  .orb2 { width: 140px; height: 140px; top: 30px; right: 6%; background: radial-gradient(circle, rgba(124,92,255,.22), transparent 70%); }
+  .orb3 { width: 90px; height: 90px; bottom: 10px; left: 22%; background: radial-gradient(circle, rgba(5,150,105,.18), transparent 70%); }
+  .hero .badge {
+    position: relative; display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 14px; border-radius: 999px; font-size: 12.5px; letter-spacing: 1.5px;
+    background: var(--card); border: 1px solid #d8e3f5; color: var(--blue); font-weight: 600;
+    box-shadow: var(--shadow); margin-bottom: 22px;
+  }
+  .hero h1 { position: relative; font-size: clamp(36px, 5.5vw, 54px); font-weight: 800; letter-spacing: 1px; margin-bottom: 16px; }
+  .hero h1 em { font-style: normal; color: var(--blue); }
+  .hero .sub { position: relative; font-size: 16.5px; color: var(--txt2); max-width: 620px; margin: 0 auto 28px; }
+  .hero .sub b { color: var(--blue); }
+  .hero .chips { position: relative; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .chip { padding: 6px 16px; border-radius: 999px; font-size: 13px; background: var(--card); border: 1px solid var(--border); color: var(--txt2); box-shadow: var(--shadow); }
+  .chip b { color: var(--blue); font-weight: 700; }
+
+  /* ===== 区块 ===== */
+  section { padding: 46px 0; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+  .sec-no { font-family: Consolas, monospace; font-size: 14px; font-weight: 700; color: var(--blue); background: var(--blue-soft); padding: 2px 10px; border-radius: 6px; }
+  .sec-title { font-size: 23px; font-weight: 700; }
+  .sec-desc { color: var(--txt2); font-size: 14.5px; max-width: 680px; margin-bottom: 26px; }
+
+  /* ===== 01 痛点 ===== */
+  .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); transition: transform .2s, box-shadow .2s, border-color .2s; }
+  .card:hover { transform: translateY(-3px); box-shadow: var(--shadow-hover); border-color: #c9d6ea; }
+  .card .ic { font-size: 24px; margin-bottom: 10px; }
+  .card h3 { font-size: 15.5px; margin-bottom: 6px; }
+  .card p { font-size: 13px; color: var(--txt2); }
+
+  /* ===== 02 容量条形图（层级） ===== */
+  .pyramid { display: flex; flex-direction: column; gap: 11px; margin: 8px 0 4px; }
+  .bar { display: flex; align-items: center; gap: 14px; }
+  .b-tag { width: 96px; flex-shrink: 0; text-align: right; font-size: 13.5px; font-weight: 700; font-family: Consolas, monospace; }
+  .b-tag small { display: block; font-size: 10.5px; color: var(--txt3); font-weight: 400; }
+  .b-track { flex: 1; height: 36px; background: #eef1f5; border-radius: 9px; position: relative; overflow: hidden; transition: box-shadow .2s; }
+  .bar:hover .b-track { box-shadow: 0 0 0 2px rgba(37,99,235,.15); }
+  .b-fill { height: 100%; border-radius: 9px; display: flex; align-items: center; padding: 0 12px; font-size: 11.5px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; }
+  .f-l0 { width: 100%; background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+  .f-l1 { width: 52%; background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+  .f-l2 { width: 78%; background: linear-gradient(90deg, #7c5cff, #a78bfa); }
+  .f-l3 { width: 38%; background: linear-gradient(90deg, #059669, #34d399); }
+  .f-l4 { width: 28%; background: repeating-linear-gradient(45deg, #8fa3bd, #8fa3bd 7px, #a9b9cf 7px, #a9b9cf 14px); }
+  .b-side { width: 132px; flex-shrink: 0; font-size: 11.5px; color: var(--txt2); }
+  .pyramid .flow { text-align: center; font-size: 12px; color: var(--txt3); margin-top: 6px; }
+  .pyramid .flow b { color: var(--blue); }
+
+  /* ===== 02 进化飞轮（HTML 圆环） ===== */
+  .wheel-box {
+    margin-top: 26px; background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow);
+    display: flex; align-items: center; gap: 30px; flex-wrap: wrap;
+  }
+  .wheel-box h4 { font-size: 15px; margin-bottom: 4px; }
+  .wheel-box .w-sub { font-size: 12.5px; color: var(--txt2); margin-bottom: 14px; }
+  .wheel { position: relative; width: 330px; height: 330px; flex-shrink: 0; margin: 0 auto; }
+  .wheel .ring {
+    position: absolute; top: 50%; left: 50%; width: 252px; height: 252px;
+    transform: translate(-50%, -50%);
+    border: 2px dashed #c7d6ec; border-radius: 50%;
+    animation: spin 26s linear infinite;
+  }
+  .wheel .ring2 { position: absolute; top: 50%; left: 50%; width: 196px; height: 196px; transform: translate(-50%, -50%); border: 1px solid #e6ecf5; border-radius: 50%; }
+  @keyframes spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+  .w-node {
+    position: absolute; width: 120px; padding: 9px 6px; border-radius: 10px;
+    background: #fff; border: 1px solid var(--border); box-shadow: var(--shadow);
+    text-align: center; z-index: 2;
+  }
+  .w-node .wi { font-size: 19px; line-height: 1.2; }
+  .w-node .wt { font-size: 13px; font-weight: 700; margin-top: 2px; }
+  .w-node .ws { font-size: 10.5px; color: var(--txt2); margin-top: 1px; }
+  .w-node.n1 { top: 0; left: 50%; transform: translateX(-50%); border-top: 3px solid #f59e0b; }
+  .w-node.n2 { top: 50%; right: 0; transform: translateY(-50%); border-top: 3px solid #3b82f6; }
+  .w-node.n3 { bottom: 0; left: 50%; transform: translateX(-50%); border-top: 3px solid #059669; }
+  .w-node.n4 { top: 50%; left: 0; transform: translateY(-50%); border-top: 3px solid #7c5cff; }
+  .w-center {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 104px; height: 104px; border-radius: 50%;
+    background: linear-gradient(135deg, #2563eb, #7c5cff); color: #fff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    box-shadow: 0 8px 22px rgba(37,99,235,.32); z-index: 3;
+  }
+  .w-center b { font-size: 15px; letter-spacing: 1px; }
+  .w-center span { font-size: 9.5px; opacity: .88; margin-top: 2px; }
+  .w-arrow { position: absolute; font-size: 14px; color: #8fb1de; z-index: 1; }
+  .w-arrow.a1 { top: 63px; left: 253px; transform: rotate(45deg); }
+  .w-arrow.a2 { top: 253px; left: 253px; transform: rotate(135deg); }
+  .w-arrow.a3 { top: 253px; left: 63px; transform: rotate(225deg); }
+  .w-arrow.a4 { top: 63px; left: 63px; transform: rotate(315deg); }
+  .wheel-legend { flex: 1; min-width: 250px; display: flex; flex-direction: column; gap: 10px; }
+  .wl-item { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; }
+  .wl-item .n { font-family: Consolas, monospace; font-weight: 700; color: var(--blue); min-width: 16px; }
+  .wl-item p { color: var(--txt2); font-size: 12.5px; }
+
+  /* ===== 03 核心机制（亮彩） ===== */
+  .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px; }
+  .rule { border-radius: var(--radius); padding: 24px 22px; box-shadow: var(--shadow); position: relative; transition: transform .2s, box-shadow .2s; }
+  .rule:hover { transform: translateY(-4px); box-shadow: var(--shadow-hover); }
+  .rule.b1 { background: linear-gradient(160deg, #eff5ff, #ffffff 55%); border: 1px solid #d4e3fb; }
+  .rule.b2 { background: linear-gradient(160deg, #f5f1ff, #ffffff 55%); border: 1px solid #ddd4fa; }
+  .rule.b3 { background: linear-gradient(160deg, #edfaf4, #ffffff 55%); border: 1px solid #cdeee0; }
+  .rule .r-top { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .rule .r-ic { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+  .b1 .r-ic { background: #dbe9fd; }
+  .b2 .r-ic { background: #e7e0fd; }
+  .b3 .r-ic { background: #d5f2e6; }
+  .rule .r-no { font-family: Consolas, monospace; font-size: 12px; font-weight: 700; color: var(--txt3); letter-spacing: 1px; }
+  .rule h3 { font-size: 17px; margin-bottom: 8px; }
+  .rule p { font-size: 13px; color: var(--txt2); }
+  .rule .kws { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+  .kw { font-size: 11.5px; font-weight: 600; padding: 2px 10px; border-radius: 999px; }
+  .b1 .kw { background: #dbe9fd; color: var(--blue); }
+  .b2 .kw { background: #e7e0fd; color: var(--violet); }
+  .b3 .kw { background: #d5f2e6; color: var(--green); }
+  .rule .ex { margin-top: 12px; padding: 9px 12px; background: rgba(255,255,255,.75); border: 1px solid rgba(0,0,0,.05); border-radius: 8px; font-size: 12px; color: var(--txt); }
+
+  /* ===== 04 对比表 ===== */
+  .tbl-wrap { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 12px 14px; text-align: center; border-bottom: 1px solid var(--border); }
+  th { background: #fafbfc; color: var(--txt2); font-size: 12.5px; font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #f8fafc; }
+  td:first-child { text-align: left; font-weight: 600; color: var(--txt); white-space: nowrap; }
+  /* 本系统列高亮 */
+  .col-mine { background: #eef4ff !important; }
+  .col-mine th { background: #dbe9fd; color: var(--blue); }
+  .col-mine td { background: #eef4ff; font-weight: 700; color: var(--green); }
+  tbody tr:hover .col-mine td { background: #e3edfe; }
+  .mine-badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; vertical-align: 2px; }
+  td.ok { color: var(--green); font-weight: 700; }
+  td.no { color: var(--red); }
+  td.some { color: var(--amber); }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 20px; }
+  .stat { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 10px; text-align: center; box-shadow: var(--shadow); }
+  .stat .num { font-size: 26px; font-weight: 800; color: var(--blue); font-family: Consolas, monospace; }
+  .stat .num.g { color: var(--green); }
+  .stat .lbl { font-size: 12px; color: var(--txt2); margin-top: 4px; }
+
+  /* ===== 05 技术栈 ===== */
+  .grid-6 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .stack, .sec-item, .dist-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow); transition: transform .2s, box-shadow .2s; }
+  .stack:hover, .sec-item:hover, .dist-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-hover); }
+  .stack .st-ic { font-size: 21px; }
+  .stack h4, .sec-item h4, .dist-card h4 { font-size: 14.5px; margin: 8px 0 6px; }
+  .stack p, .sec-item p, .dist-card p { font-size: 12.5px; color: var(--txt2); }
+  .stack .zero { display: inline-block; margin-top: 8px; padding: 2px 10px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 11.5px; font-weight: 600; }
+
+  /* ===== 06 安全 ===== */
+  .sec-item h4 { font-size: 14.5px; }
+  .sec-item p { font-size: 12.5px; color: var(--txt2); }
+
+  /* ===== 07 使用体验（场景卡） ===== */
+  .scene-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .scene { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow); transition: transform .2s, box-shadow .2s; }
+  .scene:hover { transform: translateY(-3px); box-shadow: var(--shadow-hover); }
+  .scene .s-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .scene .s-ic { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 19px; background: var(--blue-soft); }
+  .scene h3 { font-size: 15.5px; }
+  .scene .s-tag { margin-left: auto; font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 999px; }
+  .s-auto { background: var(--green-soft); color: var(--green); }
+  .s-say { background: var(--amber-soft); color: var(--amber); }
+  .scene p { font-size: 13px; color: var(--txt2); }
+  .scene .demo { margin-top: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-family: Consolas, monospace; font-size: 12px; color: var(--txt); overflow-x: auto; white-space: nowrap; }
+  .scene .demo .k { color: var(--blue); }
+  .scene .demo .v { color: var(--green); }
+
+  /* ===== 08 分发 ===== */
+  .grid-3-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .dist-card .d-ic { font-size: 23px; }
+  .dist-flow { margin-top: 16px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; box-shadow: var(--shadow); font-family: Consolas, "Microsoft YaHei", monospace; font-size: 12.5px; line-height: 2; color: var(--txt2); white-space: pre-wrap; overflow-x: auto; }
+  .dist-flow b { color: var(--txt); }
+  .dist-flow .g { color: var(--green); font-weight: 600; }
+
+  /* ===== CTA ===== */
+  .cta { margin: 40px 0 24px; background: linear-gradient(120deg, var(--blue), var(--violet)); color: #fff; border-radius: 16px; padding: 34px; text-align: center; position: relative; overflow: hidden; }
+  .cta::before { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse 60% 100% at 50% -20%, rgba(255,255,255,.18), transparent); }
+  .cta h3 { position: relative; font-size: 21px; margin-bottom: 8px; }
+  .cta p { position: relative; font-size: 13.5px; opacity: .92; }
+  .cta code { position: relative; display: inline-block; margin-top: 16px; padding: 9px 20px; border-radius: 9px; background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.25); font-size: 13px; font-family: Consolas, monospace; }
+
+  footer { text-align: center; padding: 28px 0 50px; color: var(--txt3); font-size: 12.5px; }
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity .55s ease, transform .55s ease; }
+  .reveal.on { opacity: 1; transform: none; }
+
+  @media (max-width: 640px) {
+    .hero { padding: 52px 0 34px; border-radius: 0 0 18px 18px; }
+    section { padding: 32px 0; }
+    .wrap { padding: 0 18px; }
+    .pyramid .side { display: none; }
+    .wheel { width: 260px; height: 260px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ================= Hero ================= -->
+  <header class="hero reveal on">
+    <div class="orb orb1"></div><div class="orb orb2"></div><div class="orb orb3"></div>
+    <div class="badge">🧠 MEMORY AS INFRASTRUCTURE</div>
+    <h1>AgentMemory <em>记忆银行</em></h1>
+    <p class="sub">为 AI Agent 打造的<b>可移植 · 零依赖 · 低成本 · 自进化</b>长期记忆系统 —— 突破内置记忆容量限制，让知识像复利一样累积。</p>
+    <div class="chips">
+      <div class="chip">容量 <b>无限</b>（磁盘）</div>
+      <div class="chip">检索 <b>零 Token</b></div>
+      <div class="chip">依赖 <b>零</b>（纯标准库）</div>
+      <div class="chip">部署 <b>一键</b>（Agent 自动安装）</div>
+      <div class="chip">分发 <b>24KB</b></div>
+    </div>
+  </header>
+
+  <!-- ================= 01 痛点 ================= -->
+  <section>
+    <div class="sec-head reveal"><span class="sec-no">01</span><h2 class="sec-title">为什么需要它？—— LLM 记忆四难</h2></div>
+    <p class="sec-desc reveal">模型本身没有记忆，而"记忆方案"普遍在容量、成本、进化、迁移之间顾此失彼。</p>
+    <div class="grid-4">
+      <div class="card reveal"><div class="ic">🔒</div><h3>容量受限</h3><p>内置记忆只有数千字符，跑几个月就满。删旧信息 = 丢经验；不删 = 记不进去。</p></div>
+      <div class="card reveal"><div class="ic">💰</div><h3>上下文即成本</h3><p>把记忆全塞进 prompt 最贵：100 条记忆 ≈ 5 万 Token/会话，月成本数十美元起步。</p></div>
+      <div class="card reveal"><div class="ic">🧬</div><h3>只存不进化</h3><p>传统方案是"聊天记录仓库"——只增不减、重复冗余、过时信息淹没有效信息，知识不会生长。</p></div>
+      <div class="card reveal"><div class="ic">📦</div><h3>难以迁移</h3><p>记忆锁死在某个 Agent / 某台机器里，换工具、换人、换环境就全部归零。</p></div>
+    </div>
+  </section>
+
+  <!-- ================= 02 五层金字塔 ================= -->
+  <section>
+    <div class="sec-head reveal"><span class="sec-no">02</span><h2 class="sec-title">解决方案：五层记忆金字塔</h2></div>
+    <p class="sec-desc reveal">越往顶层越精炼（价值密度越高）；底层海量原始数据，顶层固化方法论。L4 外部知识随时接入。</p>
+    <!-- 容量条形图 -->
+    <div class="pyramid">
+      <div class="bar reveal"><div class="b-tag">L0 会话<small>原始记录</small></div><div class="b-track"><div class="b-fill f-l0">海量 · 自动索引</div></div><div class="b-side">发生过什么，随时可查</div></div>
+      <div class="bar reveal"><div class="b-tag">L1 热记忆<small>高频事实</small></div><div class="b-track"><div class="b-fill f-l1">少 · 指针</div></div><div class="b-side">常用事实 + 指向 L2</div></div>
+      <div class="bar reveal"><div class="b-tag">L2 经验库<small>★ 本系统</small></div><div class="b-track"><div class="b-fill f-l2">多 · 经验/教训/方法论</div></div><div class="b-side">Markdown + SQLite 索引</div></div>
+      <div class="bar reveal"><div class="b-tag">L3 Skill<small>方法论</small></div><div class="b-track"><div class="b-fill f-l3">精 · 可执行</div></div><div class="b-side">重复≥3次 → 提炼注册</div></div>
+      <div class="bar reveal"><div class="b-tag">L4 外部<small>知识库</small></div><div class="b-track"><div class="b-fill f-l4">按需接入</div></div><div class="b-side">外部知识库 / 规范 / 数据源</div></div>
+      <div class="flow reveal">条宽 = 容量规模：海量原始 → 逐层提炼 → 精而少 <b>▲ 向上提炼 · 向下沉淀</b></div>
+    </div>
+
+    <!-- 进化飞轮（HTML 圆环闭环） -->
+    <div class="wheel-box reveal">
+      <div>
+        <h4>🔄 进化飞轮</h4>
+        <p class="w-sub">知识不是堆积，而是循环生长</p>
+        <div class="wheel">
+          <div class="ring"></div>
+          <div class="ring2"></div>
+          <div class="w-node n1"><div class="wi">💬</div><div class="wt">对话发生</div><div class="ws">L0 自动记录</div></div>
+          <div class="w-node n2"><div class="wi">🧠</div><div class="wt">经验沉淀</div><div class="ws">L2 写入，零成本</div></div>
+          <div class="w-node n3"><div class="wi">🛠</div><div class="wt">每周整理</div><div class="ws">去重·淘汰·提炼</div></div>
+          <div class="w-node n4"><div class="wi">🚀</div><div class="wt">升级 Skill</div><div class="ws">审核 · 注册 · 共享</div></div>
+          <div class="w-center"><b>知识复利</b><span>一轮比一轮好</span></div>
+          <div class="w-arrow a1">➤</div><div class="w-arrow a2">➤</div><div class="w-arrow a3">➤</div><div class="w-arrow a4">➤</div>
+        </div>
+      </div>
+      <div class="wheel-legend">
+        <div class="wl-item reveal"><span class="n">①</span><p><b>对话发生</b> —— 原始会话自动进入 L0 索引（免费，无需任何操作）</p></div>
+        <div class="wl-item reveal"><span class="n">②</span><p><b>经验沉淀</b> —— 有价值信息 / 踩坑 / 被纠正 → 写入 L2（本地，零 Token）</p></div>
+        <div class="wl-item reveal"><span class="n">③</span><p><b>每周整理</b> —— 去重、淘汰过期、跨条目提炼、发现矛盾（规则零成本，LLM 可选）</p></div>
+        <div class="wl-item reveal"><span class="n">④</span><p><b>升级 Skill</b> —— 重复 ≥3 次的模式 → Skill 草案 → 审核 → 团队共享 → 使用反馈回到 ①</p></div>
+        <div class="wl-item reveal"><span class="n">↻</span><p><b>闭环</b> —— 每次循环的产出成为下一次循环的输入，知识持续复利</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 03 核心机制 ================= -->
+  <section>
+    <div class="sec-head reveal"><span class="sec-no">03</span><h2 class="sec-title">核心机制：三条底线</h2></div>
+    <p class="sec-desc reveal">"省 Token 的代价是把记忆搞坏"？—— 三条零成本的纯设计决策，同时守住成本与准确率。</p>
+    <div class="grid-3">
+      <div class="rule b1 reveal">
+        <div class="r-top"><div class="r-ic">🎯</div><div><div class="r-no">BOTTOM LINE 01</div><h3>失败驱动检索</h3></div></div>
+        <p>不靠模糊的"话题检测"，靠最可靠的信号：<b>工具报错 → 必查踩坑记录；被纠正 → 必写教训</b>。</p>
+        <div class="kws"><span class="kw">报错即触发</span><span class="kw">该查的查得到</span><span class="kw">零 Token</span></div>
+        <div class="ex">💡 像医生看到症状才翻病历，而不是每天背一遍所有病历</div>
+      </div>
+      <div class="rule b2 reveal">
+        <div class="r-top"><div class="r-ic">🧭</div><div><div class="r-no">BOTTOM LINE 02</div><h3>摘要导航</h3></div></div>
+        <p>检索只返回"导航卡"（标题 + 标签 + 置信度，约 50 Token/条）；<b>命中才展开全文</b>。低置信度只提示"可核实"，不误导决策。</p>
+        <div class="kws"><span class="kw">渐进式披露</span><span class="kw">按需展开</span><span class="kw">防误导</span></div>
+        <div class="ex">💡 图书馆模式：目录免费查，需要哪本才借哪本</div>
+      </div>
+      <div class="rule b3 reveal">
+        <div class="r-top"><div class="r-ic">⚖️</div><div><div class="r-no">BOTTOM LINE 03</div><h3>冲突优先 + 纠错回路</h3></div></div>
+        <p>记忆与当前事实冲突 → <b>以事实为准</b>；任务失败 → 自动降权相关记忆；用户纠正 → 立刻更新并标记旧版本过时。</p>
+        <div class="kws"><span class="kw">事实优先</span><span class="kw">自动降权</span><span class="kw">错了就改</span></div>
+        <div class="ex">💡 即使存错了，代价也只是"一次被纠正"，而不是长期错误</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 04 优势对比 ================= -->
+  <section>
+    <div class="sec-head reveal"><span class="sec-no">04</span><h2 class="sec-title">优势对比</h2></div>
+    <p class="sec-desc reveal">与常见替代方案的直接比较（高亮列为本系统）：</p>
+    <div class="tbl-wrap reveal">
+    <table>
+      <thead><tr><th>能力</th><th>内置记忆</th><th>全量注入 RAG</th><th>重型记忆服务</th><th class="col-mine">AgentMemory<span class="mine-badge">本系统</span></th></tr></thead>
+      <tbody>
+      <tr><td>容量</td><td class="no">✗ 数千字符</td><td class="some">△ 受上下文限制</td><td class="ok">✓ 大</td><td class="col-mine ok">✓ 磁盘无限</td></tr>
+      <tr><td>检索成本</td><td class="some">△ 随注入增长</td><td class="no">✗ 5 万+ Token/会话</td><td class="some">△ 部署 + 模型调用</td><td class="col-mine ok">✓ 本地 SQLite，零 Token</td></tr>
+      <tr><td>知识进化</td><td class="no">✗ 无</td><td class="no">✗ 无</td><td class="ok">✓ LLM 流水线</td><td class="col-mine ok">✓ 规则零成本 + LLM 可选</td></tr>
+      <tr><td>部署成本</td><td class="ok">✓ 无需</td><td class="ok">✓ 低</td><td class="no">✗ Docker + API Key</td><td class="col-mine ok">✓ 一键，24KB，纯标准库</td></tr>
+      <tr><td>可移植性</td><td class="some">△ 锁死客户端</td><td class="some">△ 锁死管道</td><td class="some">△ 锁死平台</td><td class="col-mine ok">✓ 复制即迁移，任意 Agent</td></tr>
+      <tr><td>敏感信息保护</td><td class="no">✗ 无</td><td class="no">✗ 无</td><td class="some">△ 有</td><td class="col-mine ok">✓ secret 标记 + 不发 LLM</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <div class="stat-grid">
+      <div class="stat reveal"><div class="num g">0</div><div class="lbl">检索 Token 成本</div></div>
+      <div class="stat reveal"><div class="num">&lt;2%</div><div class="lbl">记忆开销占会话比例</div></div>
+      <div class="stat reveal"><div class="num g">6/6</div><div class="lbl">自测通过率</div></div>
+      <div class="stat reveal"><div class="num g">24KB</div><div class="lbl">分发包体积</div></div>
+      <div class="stat reveal"><div class="num">5 层</div><div class="lbl">记忆架构分层</div></div>
+      <div class="stat reveal"><div class="num g">$2-5</div><div class="lbl">月增量成本估算</div></div>
+    </div>
+  </section>
+
+  <!-- ================= 05 技术栈 ================= -->
+  <section>
+    <div class="sec-head reveal"><span class="sec-no">05</span><h2 class="sec-title">技术栈</h2></div>
+    <p class="sec-desc reveal">刻意保持极简 —— 一切为了可移植和零依赖。</p>
+    <div class="grid-6">
+      <div class="stack reveal"><div class="st-ic">🐍</div><h4>Python 标准库</h4><p>sqlite3 / json / argparse / urllib —— 零第三方依赖，任何装 Python 3.8+ 的机器直接跑。</p><div class="zero">零依赖</div></div>
+      <div class="stack reveal"><div class="st-ic">🗄️</div><h4>SQLite + FTS5</h4><p>本地全文索引：关键词检索毫秒级返回，命中按热度排序，不消耗任何 LLM Token。</p><div class="zero">零 Token</div></div>
+      <div class="stack reveal"><div class="st-ic">📝</div><h4>Markdown + YAML</h4><p>记忆文件人类可读可改；frontmatter 承载元数据（置信度 / 命中 / 状态 / secret）。文件即真相。</p><div class="zero">可审计</div></div>
+      <div class="stack reveal"><div class="st-ic">🌿</div><h4>Git 版本管理</h4><p>记忆可回滚、可追溯、可 clone、可局域网共享；pre-commit 钩子拦截密钥误提交。</p><div class="zero">可回滚</div></div>
+      <div class="stack reveal"><div class="st-ic">🔗</div><h4>DeepSeek（可选）</h4><p>仅每周整理提炼时调用（OpenAI 兼容，可换任何供应商）；检索 / 沉淀完全不需要它。</p><div class="zero">可选</div></div>
+      <div class="stack reveal"><div class="st-ic">🤖</div><h4>Agent 无关设计</h4><p>同一套记忆 pi / Claude Code / CodeBuddy 都能读写；SKILL.md 自动注册。</p><div class="zero">通用</div></div>
+    </div>
+  </section>
+
+  <!-- ================= 06 安全 ================= -->
+  <section>
+    <div class="sec-head reveal"><span class="sec-no">06</span><h2 class="sec-title">安全设计（Key 与敏感记忆）</h2></div>
+    <div class="grid-6">
+      <div class="sec-item reveal"><h4>🔑 Key 三重防护</h4><p>`.env` 被 gitignore 排除 + Windows ACL 收紧为仅当前用户 + pre-commit 钩子拦截任何密钥格式（sk- / AKIA / ghp_）误提交。</p></div>
+      <div class="sec-item reveal"><h4>🔒 secret 记忆标记</h4><p>`add --secret` 的条目：检索隐藏正文、读取需确认、<b>绝不发送给 LLM 提炼</b>（consolidate 自动跳过）。</p></div>
+      <div class="sec-item reveal"><h4>🧹 数据外流边界</h4><p>只有"每周整理（LLM 模式）"会把非 secret 记忆发给模型服务商；其余全部本地完成。</p></div>
+      <div class="sec-item reveal"><h4>📦 分发安全</h4><p>架构包自动剥离个人记忆：不含 .env / 索引 / 任何真实条目，只带示例骨架。</p></div>
+    </div>
+  </section>
+
+  <!-- ================= 07 使用体验 ================= -->
+  <section>
+    <div class="sec-head reveal"><span class="sec-no">07</span><h2 class="sec-title">使用体验：三个瞬间</h2></div>
+    <p class="sec-desc reveal">不需要学命令、不需要记流程 —— 记忆在三个自然瞬间悄悄发生。</p>
+    <div class="scene-grid">
+      <div class="scene reveal">
+        <div class="s-head"><div class="s-ic">🛟</div><h3>踩坑的瞬间</h3><span class="s-tag s-auto">自动</span></div>
+        <p>工具报错 → 系统自动翻出上次同类踩坑记录，直接告诉你答案，不用重新踩一遍。</p>
+        <div class="demo"><span class="k">add</span> --title <span class="v">"npm 损坏"</span> --category <span class="v">failures</span></div>
+      </div>
+      <div class="scene reveal">
+        <div class="s-head"><div class="s-ic">🔍</div><h3>需要的瞬间</h3><span class="s-tag s-auto">自动</span></div>
+        <p>任务涉及老经验 → 系统毫秒级检索出相关记忆，按热度排序给你最相关的几条。</p>
+        <div class="demo"><span class="k">search</span> <span class="v">"npm"</span>  <span class="c"># 本地索引，零成本</span></div>
+      </div>
+      <div class="scene reveal">
+        <div class="s-head"><div class="s-ic">📅</div><h3>每周的瞬间</h3><span class="s-tag s-say">喊一声</span></div>
+        <p>喊"整理记忆" → 自动去重、淘汰过时、提炼重复模式为 Skill 候选，知识越用越干净。</p>
+        <div class="demo"><span class="k">consolidate</span> --mode <span class="v">auto</span>  <span class="c"># 零成本</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 08 分发 ================= -->
+  <section>
+    <div class="sec-head reveal"><span class="sec-no">08</span><h2 class="sec-title">面向 AI Agent 的一键分发</h2></div>
+    <p class="sec-desc reveal">24KB 模板包，团队任何人（或其 Agent）3 步完成部署 —— 架构共享，记忆隔离。</p>
+    <div class="grid-3-2">
+      <div class="dist-card reveal"><div class="d-ic">🤖</div><h4>README_AI.md</h4><p>AI Agent 部署入口：5 步流程 + 验证标准（自测 6/6 硬门槛）+ 使用约定 + 排查表。</p></div>
+      <div class="dist-card reveal"><div class="d-ic">⚙️</div><h4>install.py 一键安装</h4><p>环境检查 → git init → 密钥钩子 → 索引 → 自测 → SKILL 自动注册（pi / claude / codebuddy 探测），JSON 报告输出。</p></div>
+      <div class="dist-card reveal"><div class="d-ic">🧩</div><h4>SKILL.md.template</h4><p>路径占位符自动替换，注册到任何 Agent 的 skills 目录；已有配置自动备份防覆盖。</p></div>
+    </div>
+    <div class="dist-flow reveal"><b>对方 Agent 的部署体验</b>（实测 7/7 步骤通过）
+  解压 zip（24KB） → 读 README_AI.md → <span class="g">python scripts/install.py</span>
+    → [OK] 环境检查 → [OK] git init → [OK] 钩子 → [OK] 索引
+    → [OK] 自测 6/6 → [OK] SKILL 注册 → 系统就绪，开始沉淀自己的记忆</div>
+  </section>
+
+  <!-- ================= CTA ================= -->
+  <div class="cta reveal">
+    <h3>让经验沉淀、流动，然后被下一位 Agent 直接继承</h3>
+    <p>架构共享 · 记忆隔离 · 一键部署 · 零成本检索</p>
+    <code>python scripts/install.py</code>
+  </div>
+
+  <footer>AgentMemory 记忆银行 · v1.0.0 · 纯 Python 标准库 · 可移植 · 可分发</footer>
+</div>
+
+<script>
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('on'); io.unobserve(e.target); } });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+</script>
+</body>
+</html>

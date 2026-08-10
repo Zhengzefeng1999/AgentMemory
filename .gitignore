@@ -1,0 +1,24 @@
+# 排除敏感/可重建文件
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+__pycache__/
+*.pyc
+health_reports/
+
+# 个人记忆不公开：公开仓库只含 _SAMPLE_ 骨架（白名单）
+bank/user/*
+!bank/user/_SAMPLE_profile.md
+bank/projects/*
+!bank/projects/_SAMPLE_project.md
+bank/knowledge/*
+!bank/knowledge/_SAMPLE_topic.md
+bank/lessons/failures/*
+!bank/lessons/failures/_SAMPLE.md
+bank/lessons/corrections/*
+!bank/lessons/corrections/_SAMPLE.md
+bank/lessons/patterns/*
+!bank/lessons/patterns/.gitkeep
+bank/CANDIDATES.md

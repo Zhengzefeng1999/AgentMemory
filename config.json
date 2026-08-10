@@ -1,0 +1,25 @@
+{
+  "bank_root": "bank",
+  "retrieval": {
+    "default_mode": "standard",
+    "modes": {
+      "light":  {"expand_top": 0, "title_scan": 300},
+      "standard": {"expand_top": 3, "title_scan": 500},
+      "rigorous": {"expand_top": 10, "title_scan": 1200}
+    },
+    "max_results": 20,
+    "archive_after_months": 6,
+    "hit_threshold_archive": 0
+  },
+  "consolidate": {
+    "llm": {
+      "provider": "deepseek",
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat",
+      "env_key": "DEEPSEEK_API_KEY"
+    },
+    "llm_window_days": 7,
+    "weekly_target": 50,
+    "pattern_threshold": 3
+  }
+}
