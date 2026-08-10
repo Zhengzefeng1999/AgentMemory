@@ -1,0 +1,59 @@
+# memory-bank
+
+AgentMemory 持久记忆银行 — 跨会话、跨 Agent 的记忆库（pi / Claude Code / CodeBuddy 共用同一套）。
+
+## 何时使用
+
+- 用户提到"记忆""上次""以前做过"或需要跨会话上下文时
+- 完成重要工作、获得新知识、踩坑、被用户纠正、发现重复模式时，值得沉淀
+- 开始新项目/接触新领域时，先检索是否已有相关记忆
+
+## 位置与命令
+
+记忆库根目录：`<MEMORY_ROOT>`
+
+所有操作通过 CLI（纯 Python 标准库，零第三方依赖）：
+
+```bash
+python <MEMORY_ROOT>/scripts/memory_tool.py <命令> [参数]
+```
+
+## 常用命令
+
+| 命令 | 用法 | 说明 |
+|------|------|------|
+| add | `--title "标题" --tags a,b --category knowledge --body "内容"` | 新增记忆；正文也可从 stdin 读 |
+| search | `search "关键词"` | 本地 FTS 检索，返回摘要列表（零 token） |
+| get | `get <path>` | 读全文；secret 条目需 `--force` |
+| update | `update <path> --field 值` | 更新条目（--title/--tags/--body/--confidence 等） |
+| archive | `archive <path>` | 归档条目 |
+| list | `list --category <分类>` | 按分类列出 |
+| health | `health` | 健康报告（条目数/命中率） |
+
+## 分类（category）
+
+- `user` — 用户身份、角色、偏好
+- `projects` — 项目上下文
+- `knowledge` — 领域知识、方法论、工具链
+- `lessons/failures` — 踩坑记录（现象/根因/解决）
+- `lessons/corrections` — 被纠正的教训（原错误理解/正确理解）
+- `lessons/patterns` — 重复模式（skill 候选）
+
+## 安全规则
+
+1. **secret 条目**：`add` 加 `--secret` → 检索摘要隐藏正文、`get` 需 `--force`、绝不发送给 LLM 提炼
+2. **`.env` 含 LLM key**：永不读取、输出或提交；git pre-commit 钩子会拦截误提交
+3. 用户敏感信息（密码、token、隐私）写入时必须 `--secret`，或干脆不写
+4. 检索零成本（本地 SQLite FTS），只有周度提炼才会消耗 API
+
+## 维护
+
+- 新增条目自动更新索引，其他 Agent **立即可检索**（共用同一套记忆）
+- 每周整理：`python <MEMORY_ROOT>/scripts/consolidate.py --mode auto`（规则整理，零成本）
+- 可选提炼：`python <MEMORY_ROOT>/scripts/consolidate.py --mode llm`（需在 `.env` 配置 `DEEPSEEK_API_KEY`；会发送**非 secret** 条目给 LLM 做跨条目提炼）
+
+## 注意
+
+- 写之前先 `search`，避免重复添加同一主题
+- 跨 Agent 共用时写入即共享；并发写请错峰（consolidate 固定每周一次即可）
+- 记忆是"事实+经验"，不是任务待办；任务状态不要写入

@@ -1,0 +1,17 @@
+#!/bin/sh
+# AgentMemory pre-commit 钩子：阻止 key/凭证被误提交
+# 检测：sk- 长串 / AWS AKIA / GitHub PAT / 常见 api_key 赋值
+fail=0
+for file in $(git diff --cached --name-only); do
+    case "$file" in
+        .env|*.example.*) continue ;;
+    esac
+    [ -f "$file" ] || continue
+    if grep -Eq '(sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|api[_-]?key["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9]{20,})' "$file" 2>/dev/null; then
+        echo "pre-commit blocked: $file may contain a secret key!"
+        echo "Remove the key first. If this is a false positive, use: git commit --no-verify"
+        fail=1
+    fi
+done
+[ "$fail" -ne 0 ] && exit 1
+exit 0

@@ -237,8 +237,10 @@ def build_zip(out_dir):
                 z.write(src, f)
         # 2. 安装指南
         z.writestr("INSTALL.md", INSTALL_MD.format(VERSION=VERSION))
-        # 3. SKILL 模板（占位符路径）
-        skill_src = os.path.join(ROOT, "..", ".pi", "agent", "skills", "memory-bank", "SKILL.md")
+        # 3. SKILL 模板（优先用根目录模板，其次 pi 已注册版本）
+        skill_src = os.path.join(ROOT, "SKILL.md.template")
+        if not os.path.exists(skill_src):
+            skill_src = os.path.join(ROOT, "..", ".pi", "agent", "skills", "memory-bank", "SKILL.md")
         if os.path.exists(skill_src):
             with open(skill_src, encoding="utf-8") as f:
                 skill = f.read().replace("D:\\AgentMemory", "<MEMORY_ROOT>").replace("D:/AgentMemory", "<MEMORY_ROOT>")
