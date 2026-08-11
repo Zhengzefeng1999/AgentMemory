@@ -1,17 +1,27 @@
 #!/bin/sh
-# AgentMemory pre-commit 钩子：阻止 key/凭证被误提交
-# 检测：sk- 长串 / AWS AKIA / GitHub PAT / 常见 api_key 赋值
+# AgentMemory pre-commit 钩子 v2（ADR-0002 防线③：提交前闸门）
+# 扫描全部已暂存文件：Block 级命中 → 拒绝提交（--no-verify 可绕过，需人工负责）
+# 规则与写前拦截共用 scripts/security_rules.py，保证三层一致。
+
+TOPDIR="$(git rev-parse --show-toplevel 2>/dev/null)"
+SCANNER="$TOPDIR/scripts/security_rules.py"
 fail=0
+
+[ -n "$TOPDIR" ] || { echo "pre-commit: 无法定位仓库根目录，跳过扫描"; exit 0; }
+[ -f "$SCANNER" ] || { echo "pre-commit: security_rules.py 不存在，跳过扫描"; exit 0; }
+
 for file in $(git diff --cached --name-only); do
     case "$file" in
-        .env|*.example.*) continue ;;
+        .env|*.example.*|*.png|*.jpg|*.jpeg|*.gif|*.db|*.db-wal|*.db-shm|PRELOAD.md) continue ;;
     esac
     [ -f "$file" ] || continue
-    if grep -Eq '(sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|api[_-]?key["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9]{20,})' "$file" 2>/dev/null; then
-        echo "pre-commit blocked: $file may contain a secret key!"
-        echo "Remove the key first. If this is a false positive, use: git commit --no-verify"
+    # Block 级命中即拒绝（security_rules.py 退出码 1 = 命中 Block；不解析中文输出，避免编码问题）
+    if ! python "$SCANNER" "$file" >/dev/null 2>&1; then
+        echo "pre-commit blocked: $file may contain a secret/credential!"
+        echo "Remove the credential first. If intentional, use: git commit --no-verify"
         fail=1
     fi
 done
+
 [ "$fail" -ne 0 ] && exit 1
 exit 0

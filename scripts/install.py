@@ -52,9 +52,10 @@ def check_python():
 
 
 def check_scripts():
-    for f in ("memory_tool.py", "build_index.py", "consolidate.py"):
+    for f in ("memory_tool.py", "build_index.py", "consolidate.py",
+              "daemon.py", "build_preload.py", "infer.py", "security_rules.py"):
         assert os.path.exists(os.path.join(ROOT, f)), f"缺少 {f}"
-    return "3 个脚本齐全"
+    return f"{7} 个脚本齐全"
 
 
 def ensure_target(args):
@@ -115,10 +116,12 @@ def build_index(target):
 
 
 def run_tests(target):
-    r = run([sys.executable, os.path.join(target, "tests", "test_memory_tool.py")], cwd=target)
-    assert r.returncode == 0, r.stdout[-300:] + r.stderr[:300]
-    passed = r.stdout.count("[PASS]")
-    return f"{passed} 项自测通过"
+    total = 0
+    for t in ("test_memory_tool.py", "test_consolidate.py", "test_v2.py"):
+        r = run([sys.executable, os.path.join(target, "tests", t)], cwd=target)
+        assert r.returncode == 0, f"{t}: " + r.stdout[-300:] + r.stderr[:300]
+        total += r.stdout.count("[PASS]")
+    return f"{total} 项自测通过"
 
 
 def register_skill(target, args):

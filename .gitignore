@@ -22,3 +22,6 @@ bank/lessons/corrections/*
 bank/lessons/patterns/*
 !bank/lessons/patterns/.gitkeep
 bank/CANDIDATES.md
+bank/CONFLICTS.md
+bank/candidates/
+PRELOAD.md

@@ -31,7 +31,7 @@ python scripts/install.py --target D:/AgentMemory
 python scripts/install.py --agent pi        # pi / claude / codebuddy / none
 ```
 
-安装器会自动完成：git init（+初次提交）→ pre-commit 密钥钩子 → SQLite 索引 → 自测（6 项）→ 注册 `memory-bank` SKILL 到 agent 的 skills 目录。
+安装器会自动完成：git init（+初次提交）→ pre-commit 密钥钩子 → SQLite 索引 → 自测（28 项）→ 注册 `memory-bank` SKILL 到 agent 的 skills 目录。
 
 ### 第 3 步：验证（必须全部通过）
 
@@ -57,7 +57,7 @@ cp .env.example .env
 ```
 ✅ AgentMemory 记忆系统已部署
 - 位置: <安装目录>
-- 状态: 自测 6/6 通过，索引正常
+- 状态: 自测 28/28 通过，索引正常
 - 使用: python scripts/memory_tool.py add/search/get ...
 - SKILL: 已注册 memory-bank（下次会话生效）
 - 三条底线: 失败驱动检索 / 摘要导航 / 冲突优先

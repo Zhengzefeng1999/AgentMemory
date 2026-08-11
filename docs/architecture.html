@@ -262,8 +262,9 @@
       <div class="chip">容量 <b>无限</b>（磁盘）</div>
       <div class="chip">检索 <b>零 Token</b></div>
       <div class="chip">依赖 <b>零</b>（纯标准库）</div>
-      <div class="chip">部署 <b>一键</b>（Agent 自动安装）</div>
-      <div class="chip">分发 <b>24KB</b></div>
+      <div class="chip">捕获 <b>全自动</b>（会话中自主写入）</div>
+      <div class="chip">防线 <b>三层</b>（写前/周扫/闸门）</div>
+      <div class="chip">写入 <b>~100ms</b>（daemon 常驻）</div>
     </div>
   </header>
 
@@ -321,26 +322,26 @@
 
   <!-- ================= 03 核心机制 ================= -->
   <section>
-    <div class="sec-head reveal"><span class="sec-no">03</span><h2 class="sec-title">核心机制：三条底线</h2></div>
-    <p class="sec-desc reveal">"省 Token 的代价是把记忆搞坏"？—— 三条零成本的纯设计决策，同时守住成本与准确率。</p>
+    <div class="sec-head reveal"><span class="sec-no">03</span><h2 class="sec-title">核心机制：三条设计底线（v2）</h2></div>
+    <p class="sec-desc reveal">v2 架构的三大支柱：类型分层冲突处理、双信号生命周期、性能红线（ADR-0001/0003/0005）。</p>
     <div class="grid-3">
       <div class="rule b1 reveal">
-        <div class="r-top"><div class="r-ic">🎯</div><div><div class="r-no">BOTTOM LINE 01</div><h3>失败驱动检索</h3></div></div>
-        <p>不靠模糊的"话题检测"，靠最可靠的信号：<b>工具报错 → 必查踩坑记录；被纠正 → 必写教训</b>。</p>
-        <div class="kws"><span class="kw">报错即触发</span><span class="kw">该查的查得到</span><span class="kw">零 Token</span></div>
-        <div class="ex">💡 像医生看到症状才翻病历，而不是每天背一遍所有病历</div>
+        <div class="r-top"><div class="r-ic">⚖️</div><div><div class="r-no">BOTTOM LINE 01</div><h3>类型分层 · 冲突立场</h3></div></div>
+        <p>条目分三类：<b>事实类</b>（可附外部依据，由你拍板）、<b>认知类</b>（保留沿革链 superseded_by，不静默覆盖）、<b>偏好类</b>（永不纠正）。系统给结论，你查依据——不做应声虫。</p>
+        <div class="kws"><span class="kw">fact/belief/preference</span><span class="kw">冲突卡</span><span class="kw">沿革可追溯</span></div>
+        <div class="ex">💡 你检索时会撞见自己的认知演化历史，而不是自我重复的回声室</div>
       </div>
       <div class="rule b2 reveal">
-        <div class="r-top"><div class="r-ic">🧭</div><div><div class="r-no">BOTTOM LINE 02</div><h3>摘要导航</h3></div></div>
-        <p>检索只返回"导航卡"（标题 + 标签 + 置信度，约 50 Token/条）；<b>命中才展开全文</b>。低置信度只提示"可核实"，不误导决策。</p>
-        <div class="kws"><span class="kw">渐进式披露</span><span class="kw">按需展开</span><span class="kw">防误导</span></div>
-        <div class="ex">💡 图书馆模式：目录免费查，需要哪本才借哪本</div>
+        <div class="r-top"><div class="r-ic">🌡️</div><div><div class="r-no">BOTTOM LINE 02</div><h3>双信号生命周期</h3></div></div>
+        <p>条目的冷热由<b>更新频率 + 读取频率</b>共同决定：长期未更新且未被读 → 衰减归档；被频繁读取 → confidence 回升。记忆库的冷热由你的实际使用塑造。</p>
+        <div class="kws"><span class="kw">last_accessed</span><span class="kw">衰减不误杀</span><span class="kw">使用即复活</span></div>
+        <div class="ex">💡 老而常用的核心知识永不误杀，陈年垃圾自然沉底</div>
       </div>
       <div class="rule b3 reveal">
-        <div class="r-top"><div class="r-ic">⚖️</div><div><div class="r-no">BOTTOM LINE 03</div><h3>冲突优先 + 纠错回路</h3></div></div>
-        <p>记忆与当前事实冲突 → <b>以事实为准</b>；任务失败 → 自动降权相关记忆；用户纠正 → 立刻更新并标记旧版本过时。</p>
-        <div class="kws"><span class="kw">事实优先</span><span class="kw">自动降权</span><span class="kw">错了就改</span></div>
-        <div class="ex">💡 即使存错了，代价也只是"一次被纠正"，而不是长期错误</div>
+        <div class="r-top"><div class="r-ic">⚡</div><div><div class="r-no">BOTTOM LINE 03</div><h3>性能红线：LLM 不进热路径</h3></div></div>
+        <p>add/search/get 零 LLM、零网络（仅本地正则/SQL）；所有智能机制（补扫/冲突/衰减/草稿）挂每周 consolidate 批处理。实测：daemon 写入 ~100ms（v1 的 1.3s），检索 2-3ms。</p>
+        <div class="kws"><span class="kw">热路径零 LLM</span><span class="kw">daemon 常驻</span><span class="kw">机制再多也不慢</span></div>
+        <div class="ex">💡 慢的不是双保险，是把 LLM 放错路径（ADR-0005）</div>
       </div>
     </div>
   </section>
@@ -362,13 +363,13 @@
       </tbody>
     </table>
     </div>
-    <div class="stat-grid">
+      <div class="stat-grid">
       <div class="stat reveal"><div class="num g">0</div><div class="lbl">检索 Token 成本</div></div>
-      <div class="stat reveal"><div class="num">&lt;2%</div><div class="lbl">记忆开销占会话比例</div></div>
-      <div class="stat reveal"><div class="num g">6/6</div><div class="lbl">自测通过率</div></div>
-      <div class="stat reveal"><div class="num g">24KB</div><div class="lbl">分发包体积</div></div>
+      <div class="stat reveal"><div class="num g">28</div><div class="lbl">自测通过项数</div></div>
+      <div class="stat reveal"><div class="num g">~100ms</div><div class="lbl">daemon 写入延迟</div></div>
+      <div class="stat reveal"><div class="num g">2-3ms</div><div class="lbl">本地检索延迟</div></div>
       <div class="stat reveal"><div class="num">5 层</div><div class="lbl">记忆架构分层</div></div>
-      <div class="stat reveal"><div class="num g">$2-5</div><div class="lbl">月增量成本估算</div></div>
+      <div class="stat reveal"><div class="num g">3 道</div><div class="lbl">安全防线</div></div>
     </div>
   </section>
 
@@ -390,10 +391,10 @@
   <section>
     <div class="sec-head reveal"><span class="sec-no">06</span><h2 class="sec-title">安全设计（Key 与敏感记忆）</h2></div>
     <div class="grid-6">
-      <div class="sec-item reveal"><h4>🔑 Key 三重防护</h4><p>`.env` 被 gitignore 排除 + Windows ACL 收紧为仅当前用户 + pre-commit 钩子拦截任何密钥格式（sk- / AKIA / ghp_）误提交。</p></div>
-      <div class="sec-item reveal"><h4>🔒 secret 记忆标记</h4><p>`add --secret` 的条目：检索隐藏正文、读取需确认、<b>绝不发送给 LLM 提炼</b>（consolidate 自动跳过）。</p></div>
-      <div class="sec-item reveal"><h4>🧹 数据外流边界</h4><p>只有"每周整理（LLM 模式）"会把非 secret 记忆发给模型服务商；其余全部本地完成。</p></div>
-      <div class="sec-item reveal"><h4>📦 分发安全</h4><p>架构包自动剥离个人记忆：不含 .env / 索引 / 任何真实条目，只带示例骨架。</p></div>
+      <div class="sec-item reveal"><h4>🔑 防线① 写前拦截</h4><p>凭证类（sk- / AKIA / ghp_ / 私钥 / Bearer）→ <b>拒绝写入</b>；敏感类（内网 IP / 手机号 / 邮箱 / Cookie）→ <b>自动标 secret</b>（摘要隐藏、get 需 --force、不发给 LLM、不进 PRELOAD）。</p></div>
+      <div class="sec-item reveal"><h4>🔒 防线② 周扫补检</h4><p>consolidate --mode llm 对近 7 天条目规则补扫，漏网的自动标 secret 并提示——把漏网之鱼变成事后发现。</p></div>
+      <div class="sec-item reveal"><h4>🧹 防线③ 提交闸门</h4><p>git pre-commit 全量扫描（含新增文件），Block 级命中拒绝提交；--no-verify 需人工显式绕过。LLM 数据边界：secret 条目绝不外发。</p></div>
+      <div class="sec-item reveal"><h4>📦 分发安全</h4><p>架构包自动剥离个人记忆：不含 .env / 索引 / 任何真实条目，只带示例骨架；三层规则共用 security_rules.py 保证一致。</p></div>
     </div>
   </section>
 
@@ -403,19 +404,19 @@
     <p class="sec-desc reveal">不需要学命令、不需要记流程 —— 记忆在三个自然瞬间悄悄发生。</p>
     <div class="scene-grid">
       <div class="scene reveal">
-        <div class="s-head"><div class="s-ic">🛟</div><h3>踩坑的瞬间</h3><span class="s-tag s-auto">自动</span></div>
-        <p>工具报错 → 系统自动翻出上次同类踩坑记录，直接告诉你答案，不用重新踩一遍。</p>
-        <div class="demo"><span class="k">add</span> --title <span class="v">"npm 损坏"</span> --category <span class="v">failures</span></div>
+        <div class="s-head"><div class="s-ic">🛟</div><h3>踩坑的瞬间</h3><span class="s-tag s-auto">全自动</span></div>
+        <p>agent 会话中发现踩坑/被纠正/新知识 → <b>自主 capture 写入</b>，无需确认；写前安全拦截自动标记敏感内容。</p>
+        <div class="demo"><span class="k">capture</span> --body <span class="v">"Excel 打开大断面 CSV 要用 utf-8-sig"</span> <span class="c"># 类型/分类自动推断</span></div>
       </div>
       <div class="scene reveal">
         <div class="s-head"><div class="s-ic">🔍</div><h3>需要的瞬间</h3><span class="s-tag s-auto">自动</span></div>
-        <p>任务涉及老经验 → 系统毫秒级检索出相关记忆，按热度排序给你最相关的几条。</p>
-        <div class="demo"><span class="k">search</span> <span class="v">"npm"</span>  <span class="c"># 本地索引，零成本</span></div>
+        <p>任务涉及老经验 → 毫秒级检索出相关记忆；要答案时 <b>--synthesize</b> 给出带 [来源:path] 的综合回答，可展开验证。</p>
+        <div class="demo"><span class="k">search</span> <span class="v">"水位基面换算怎么做"</span> --synthesize <span class="c"># 结论带来源</span></div>
       </div>
       <div class="scene reveal">
         <div class="s-head"><div class="s-ic">📅</div><h3>每周的瞬间</h3><span class="s-tag s-say">喊一声</span></div>
-        <p>喊"整理记忆" → 自动去重、淘汰过时、提炼重复模式为 Skill 候选，知识越用越干净。</p>
-        <div class="demo"><span class="k">consolidate</span> --mode <span class="v">auto</span>  <span class="c"># 零成本</span></div>
+        <p>consolidate 自动完成：双信号衰减、去重、敏感补扫、语义冲突→冲突卡（你拍板）、模式→SKILL 草稿。</p>
+        <div class="demo"><span class="k">consolidate</span> --mode <span class="v">llm</span> <span class="c"># 一次跑完五件事</span></div>
       </div>
     </div>
   </section>
@@ -429,10 +430,10 @@
       <div class="dist-card reveal"><div class="d-ic">⚙️</div><h4>install.py 一键安装</h4><p>环境检查 → git init → 密钥钩子 → 索引 → 自测 → SKILL 自动注册（pi / claude / codebuddy 探测），JSON 报告输出。</p></div>
       <div class="dist-card reveal"><div class="d-ic">🧩</div><h4>SKILL.md.template</h4><p>路径占位符自动替换，注册到任何 Agent 的 skills 目录；已有配置自动备份防覆盖。</p></div>
     </div>
-    <div class="dist-flow reveal"><b>对方 Agent 的部署体验</b>（实测 7/7 步骤通过）
-  解压 zip（24KB） → 读 README_AI.md → <span class="g">python scripts/install.py</span>
+    <div class="dist-flow reveal"><b>对方 Agent 的部署体验</b>（实测 28/28 步骤通过）
+  解压 zip → 读 README_AI.md → <span class="g">python scripts/install.py</span>
     → [OK] 环境检查 → [OK] git init → [OK] 钩子 → [OK] 索引
-    → [OK] 自测 6/6 → [OK] SKILL 注册 → 系统就绪，开始沉淀自己的记忆</div>
+    → [OK] 自测 28/28 → [OK] SKILL 注册 → 系统就绪，开始沉淀自己的记忆</div>
   </section>
 
   <!-- ================= CTA ================= -->
@@ -442,7 +443,7 @@
     <code>python scripts/install.py</code>
   </div>
 
-  <footer>AgentMemory 记忆银行 · v1.0.0 · 纯 Python 标准库 · 可移植 · 可分发</footer>
+  <footer>AgentMemory 记忆银行 · v2.0.0 · 纯 Python 标准库 · 可移植 · 可分发 · 不做应声虫</footer>
 </div>
 
 <script>
