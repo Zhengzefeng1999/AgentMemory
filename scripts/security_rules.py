@@ -20,8 +20,9 @@ BLOCK_PATTERNS = [
     ("GitLab PAT", r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
     ("Bearer token", r"\bBearer\s+[A-Za-z0-9._-]{20,}", re.IGNORECASE),
     ("私钥块", r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"),
-    ("密码赋值", r"(?:password|passwd|pwd|secret|token)\s*[:=]\s*['\"][^'\"]{6,}['\"]", re.IGNORECASE),
-    ("通用 api key 长串", r"\b(?:api[_-]?key|apikey|access[_-]?key)\s*[:=]\s*['\"][A-Za-z0-9_-]{20,}['\"]", re.IGNORECASE),
+    ("密码赋值", r"\b(?:password|passwd|pwd|secret|token)\b\s*[\"']?\s*[:=]\s*[\"'][^\"']{6,}[\"']", re.IGNORECASE),
+    ("app_secret 赋值", r"\bapp[_-]?secret\b\s*[\"']?\s*[:=]\s*[\"'][A-Za-z0-9_-]{12,}[\"']", re.IGNORECASE),
+    ("key 变量赋值(含小写值)", r"\b(?:api[_-]?key|access[_-]?key|apikey)\b\s*[\"']?\s*[:=]\s*[\"'][^\"']*(?=[A-Za-z0-9_]*[a-z])[A-Za-z0-9_]{16,}[\"']", re.IGNORECASE),
     ("微信/平台 Cookie 长串", r"(?:Cookie|cookies?)\s*[:=]\s*['\"][A-Za-z0-9_=;.%+-]{40,}['\"]", re.IGNORECASE),
 ]
 

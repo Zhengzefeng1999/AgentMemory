@@ -243,9 +243,16 @@ def build_zip(out_dir):
     os.makedirs(out_dir, exist_ok=True)
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-        # 1. 架构文件
+        # 1. 架构文件（config.json 用 example 版，清除本机凭据）
         for f in INCLUDE_FILES:
             src = os.path.join(ROOT, f)
+            if f == "config.json":
+                # 安全：打包 config.example.json（空凭据），绝不打包本机真实凭据
+                example = os.path.join(ROOT, "config.example.json")
+                if os.path.exists(example):
+                    z.write(example, "config.json")
+                    print(f"  [安全] config.json 已替换为 example 版（无凭据）")
+                continue
             if os.path.exists(src):
                 z.write(src, f)
         # 2. 安装指南

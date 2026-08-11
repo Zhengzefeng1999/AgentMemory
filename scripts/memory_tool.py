@@ -163,9 +163,12 @@ def init_schema(conn):
         except sqlite3.OperationalError:
             pass  # 列已存在
     try:
-        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(title, body)")
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(title, body, tokenize='trigram')")
     except sqlite3.OperationalError:
-        pass  # FTS5 不可用时退化
+        try:
+            conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(title, body)")
+        except sqlite3.OperationalError:
+            pass  # FTS5 不可用时退化
 
 def index_file(conn, fp, meta, body):
     rel = entry_rel_path(fp)
@@ -204,9 +207,11 @@ def rebuild_index(verbose=True):
     init_schema(conn)
     conn.execute("DELETE FROM entries")
     try:
-        conn.execute("DELETE FROM entries_fts")
+        # 旧版 unicode61 FTS 表不支持中文分词 → 重建为 trigram
+        conn.execute("DROP TABLE IF EXISTS entries_fts")
     except sqlite3.OperationalError:
         pass
+    init_schema(conn)  # 重新创建 trigram FTS 表
     n = 0
     for fp in all_entry_files():
         try:
@@ -417,16 +422,27 @@ def cmd_search(args):
     rows = conn.execute(sql, params).fetchall()
     scored = []
     if q:
+        # 先试 FTS5（trigram 对 ≥3 字中文有效）
         try:
             fts = conn.execute("SELECT rowid FROM entries_fts WHERE entries_fts MATCH ? LIMIT ?",
                                (q.replace('"', ''), limit * 3)).fetchall()
             fts_ids = {r[0] for r in fts}
         except sqlite3.OperationalError:
             fts_ids = None
+        # LIKE 兜底（2 字中文查询 FTS 匹配不到；FTS5 表可直接 LIKE）
+        try:
+            like_rows = conn.execute(
+                "SELECT rowid FROM entries_fts WHERE title LIKE ? OR body LIKE ? LIMIT ?",
+                (f"%{q}%", f"%{q}%", limit * 3)).fetchall()
+            like_ids = {r[0] for r in like_rows}
+        except sqlite3.OperationalError:
+            like_ids = None
         for r in rows:
             score = 0
             if fts_ids is not None and r[0] in fts_ids:
                 score += 10
+            if like_ids is not None and r[0] in like_ids:
+                score += 4
             if q.lower() in r[2].lower():
                 score += 5
             if r[8] and q.lower() in r[8].lower():

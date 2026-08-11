@@ -15,10 +15,11 @@ AgentMemory 持久记忆银行 v2 — 跨会话、跨 Agent 的记忆库（pi / 
 优先使用 daemon（快速，~10ms）；daemon 未启动时降级为 CLI：
 
 ```bash
-# daemon 方式（常驻服务，消灭 1.3s 进程启动开销；ADR-0004）
-curl -s -X POST http://127.0.0.1:8123/memory -H "Content-Type: application/json" \
-  -d '{"cmd":"add","body":"...","auto":true}'
-curl -s "http://127.0.0.1:8123/memory" ...  # search 见下
+# daemon 方式（常驻服务，~10ms；跨平台 python 调用，不依赖 curl）
+python -c "import json,urllib.request as u; d=json.dumps({'cmd':'add','body':'...','auto':True}).encode(); print(u.urlopen(u.Request('http://127.0.0.1:8123/memory',d,{'Content-Type':'application/json'})).read().decode())"
+
+# daemon 搜索:
+python -c "import json,urllib.request as u; d=json.dumps({'cmd':'search','query':'关键词'}).encode(); print(u.urlopen(u.Request('http://127.0.0.1:8123/memory',d,{'Content-Type':'application/json'})).read().decode())"
 
 # CLI 方式（离线兜底，同一套语义）
 python <MEMORY_ROOT>/scripts/memory_tool.py <命令> [参数]

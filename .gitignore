@@ -25,3 +25,5 @@ bank/CANDIDATES.md
 bank/CONFLICTS.md
 bank/candidates/
 PRELOAD.md
+config.json
+config.example.json

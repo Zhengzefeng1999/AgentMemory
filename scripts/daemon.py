@@ -138,10 +138,19 @@ def _daemon_search(q, limit=20, synthesize=False):
         fts_ids = {r[0] for r in fts}
     except sqlite3.OperationalError:
         fts_ids = None
+    try:
+        like_rows = conn.execute(
+            "SELECT rowid FROM entries_fts WHERE title LIKE ? OR body LIKE ? LIMIT ?",
+            (f"%{q}%", f"%{q}%", limit * 3)).fetchall()
+        like_ids = {r[0] for r in like_rows}
+    except sqlite3.OperationalError:
+        like_ids = None
     for r in rows:
         score = 0
         if fts_ids is not None and r[0] in fts_ids:
             score += 10
+        if like_ids is not None and r[0] in like_ids:
+            score += 4
         if q.lower() in r[2].lower():
             score += 5
         if r[8] and q.lower() in r[8].lower():
