@@ -1,4 +1,4 @@
-# 🧠 AgentMemory · 记忆银行 v2
+# 🧠 AgentMemory · 记忆银行
 
 > 可移植、零依赖、低成本、自进化的 Agent 会话记忆库。
 > 突破 pi memory 5000 chars 限制，任何 Agent 客户端（pi / Claude Code / CodeBuddy）可读写同一套记忆。
