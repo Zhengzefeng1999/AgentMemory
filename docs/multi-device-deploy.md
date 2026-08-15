@@ -47,12 +47,50 @@ git clone https://github.com/Zhengzefeng1999/AgentMemory.git D:/AgentMemory
 
 > 若已有一份 AgentMemory 目录，可跳过克隆，只需确保 `scripts/sync_memory.py` 存在（见文末附录）。
 
-### 第 2 步：克隆私有记忆库到 bank/
+### 第 2 步：获取记忆库 bank/
+
+**分两种情况，先判断你是哪种：**
+
+#### 情况 A：全新设备（bank/ 不存在或为空）—— 直接 clone
 
 ```bash
 # 关键：用 git clone，绝不整目录复制粘贴（那是"覆盖"的根源）
 git clone https://github.com/Zhengzefeng1999/AgentMemoryBank.git D:/AgentMemory/bank
 ```
+
+#### 情况 B：已有记忆目录（主设备就是这种情况！）—— 合并，绝不重新 clone
+
+> ⚠️ **最重要的一条**：如果你已经在本机积累了记忆（`bank/` 下有 `.md` 文件），
+> **绝不能删除或重新 clone**！否则本地记忆会被覆盖丢失。
+> 正确做法是把现有目录"升级"成 git 仓库，然后与远程**合并**：
+
+```bash
+cd D:/AgentMemory/bank
+
+# ① 如果还不是 git 仓库，初始化（已经是就跳过）
+git init -b main
+
+# ② 把本地已有记忆提交成一个快照（先保存，防丢失）
+git add -A
+git commit -m "本地已有记忆快照（升级前）"
+
+# ③ 连接私有远程仓库
+git remote add origin https://github.com/Zhengzefeng1999/AgentMemoryBank.git
+
+# ④ 拉取远程记忆并与本地合并（两边历史无关，需 allow-unrelated-histories）
+#    两边的记忆文件会共存，不互相覆盖；
+#    仅当出现相同时间戳的同名文件时才会冲突，届时按第六节人工处理
+git pull origin main --allow-unrelated-histories --no-edit
+
+# ⑤ 推送合并结果（本地记忆 + 远程记忆合为一体）
+git push -u origin main
+```
+
+验证：`python D:/AgentMemory/scripts/sync_memory.py status`，
+应能看到"本地已有记忆快照"与远程历史的提交，且 `bank/` 下本地原文件全部还在。
+
+> 原理：情况 B 不是"一台设备覆盖另一台"，而是 **git 把两套历史合并**——
+> 双方的每个文件都会保留，谁也不会丢。这正是 git 比"复制粘贴"安全的原因。
 
 ### 第 3 步：配置 Git 身份（每台设备一次）
 
@@ -115,6 +153,9 @@ python scripts/sync_memory.py
 
 | 问题 | 处理 |
 |---|---|
+| 本机已有记忆目录，能直接 clone 吗 | **不能**。clone 会因目录非空而失败（或覆盖）。按第三节情况 B 执行：init → 提交本地快照 → remote add → pull --allow-unrelated-histories → push |
+| 已有目录 pull 报 `refusing to merge unrelated histories` | 正常：本地与远程历史无关。加 `--allow-unrelated-histories`（见情况 B 第④步） |
+| 本地与远程有同名文件（同时间戳）冲突 | 罕见但可能。按第六节人工合并，两边内容都保留 |
 | push 报 `non-fast-forward` | 正常：远端有新提交。运行完整 `sync`（先 pull 合并再推送） |
 | pull 报 `CONFLICT` | 人工解决（见第六节），不覆盖对方内容 |
 | 认证失败 / Permission denied | 检查 token 是否有效、仓库是否私有、是否有写权限；重新配置第 4 步 |
