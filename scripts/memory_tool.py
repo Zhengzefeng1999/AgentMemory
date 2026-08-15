@@ -63,8 +63,15 @@ def _utf8(s):
     return s
 
 def load_config():
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        return json.load(f)
+    """读取 config.json；缺失/损坏时回退空配置（默认值生效），保证可移植性。"""
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError:
+        print(f"⚠️ {CONFIG_PATH} 不是合法 JSON，已按默认配置运行")
+        return {}
 
 def now_str():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -281,6 +288,7 @@ def _build_meta(title, tags, category, confidence, source, secret, mtype, pinned
         "conflicts": [],
         "type": mtype,
         "pinned": bool(pinned),
+        "secret": bool(secret),
         "last_accessed": "",
         "superseded_by": "",
     }

@@ -1,3 +1,8 @@
+---
+name: memory-bank
+description: AgentMemory 持久记忆银行 v2 —— 本机所有 Agent 共用的跨会话记忆库（<MEMORY_ROOT>）。用户提到记忆/上次/以前做过、需要跨会话上下文、完成重要工作/踩坑/被纠正时检索或自动捕获。
+---
+
 # memory-bank
 
 AgentMemory 持久记忆银行 v2 — 跨会话、跨 Agent 的记忆库（pi / Claude Code / CodeBuddy 共用同一套）。

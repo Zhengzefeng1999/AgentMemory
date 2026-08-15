@@ -111,5 +111,6 @@ n = rebuild_index(verbose=False)
 check("索引重建", n >= 15, str(n))
 
 cleanup()
+rebuild_index(verbose=False)  # cleanup 只删文件；重建索引清除孤儿行，避免污染生产索引（health/pinned 计数）
 print(f"\n===== 结果: {PASS} 通过 / {FAIL} 失败 =====")
 sys.exit(1 if FAIL else 0)

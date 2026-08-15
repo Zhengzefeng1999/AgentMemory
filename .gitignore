@@ -28,3 +28,6 @@ PRELOAD.md
 config.json
 config.example.json
 launch-feishu.cjs
+# daemon 运行日志
+daemon.out.log
+daemon.err.log

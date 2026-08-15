@@ -7,5 +7,11 @@ if %errorlevel%==0 (
     echo [AgentMemory] daemon already running, skip
     exit /b 0
 )
-start /min "" F:\Anaconda3\python.exe scripts\daemon.py --once-preload
+where python > nul 2>&1
+if %errorlevel%==0 (
+    start /min "" python scripts\daemon.py --once-preload
+) else (
+    echo [AgentMemory] python not found on PATH, fallback to Anaconda
+    start /min "" F:\Anaconda3\python.exe scripts\daemon.py --once-preload
+)
 echo [AgentMemory] daemon started

@@ -26,6 +26,8 @@ AGENT_SKILL_DIRS = {
     "pi": [os.path.expandvars(r"%USERPROFILE%\.pi\agent\skills"), os.path.expanduser("~/.pi/agent/skills")],
     "claude": [os.path.expandvars(r"%USERPROFILE%\.claude\skills"), os.path.expanduser("~/.claude/skills")],
     "codebuddy": [os.path.expandvars(r"%USERPROFILE%\.codebuddy\skills"), os.path.expanduser("~/.codebuddy/skills")],
+    # DeepSeek Harness: agentsHome 默认 %USERPROFILE%\.agents（技能目录 <agentsHome>\skills）
+    "dsh": [os.path.expandvars(r"%USERPROFILE%\.agents\skills"), os.path.expanduser("~/.agents/skills")],
 }
 
 REPORT = {"ok": [], "warn": [], "fail": []}
@@ -176,7 +178,7 @@ def main():
         pass
     p = argparse.ArgumentParser(prog="install", description="AgentMemory 自动安装器")
     p.add_argument("--target", default="", help="安装目标目录（默认：解压目录本身）")
-    p.add_argument("--agent", choices=["pi", "claude", "codebuddy", "none", ""], default="", help="agent 类型（默认自动探测）")
+    p.add_argument("--agent", choices=["pi", "claude", "codebuddy", "dsh", "none", ""], default="", help="agent 类型（默认自动探测）")
     p.add_argument("--check", action="store_true", help="仅环境检查")
     p.add_argument("--json", action="store_true", help="输出 JSON 报告")
     args = p.parse_args()
