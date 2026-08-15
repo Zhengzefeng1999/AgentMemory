@@ -9,6 +9,7 @@ __pycache__/
 health_reports/
 
 # 个人记忆不公开：公开仓库只含 _SAMPLE_ 骨架（白名单）
+bank/.gitignore
 bank/user/*
 !bank/user/_SAMPLE_profile.md
 bank/projects/*
