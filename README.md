@@ -16,6 +16,11 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
+> 🧭 **交互式架构图**（含「写一条记忆 / 查一条记忆 / 何时才用大模型」三个引导视角）：[docs/architecture-diagram.html](docs/architecture-diagram.html) · 架构白皮书见 [docs/architecture.html](docs/architecture.html)
+>
+> 图源规格：[docs/architecture-diagram.json](docs/architecture-diagram.json)，架构变更后重新生成：
+> `node ~/.pi/agent/skills/archify/bin/archify.mjs render architecture docs/architecture-diagram.json docs/architecture-diagram.html --quality showcase`
+
 ## v2 新增能力
 
 | 能力 | 说明 | 决策 |
@@ -60,6 +65,9 @@ AgentMemory\
     install.py           ← 一键部署 + 自测 + 注册 SKILL
     package_template.py  ← 分发模板打包
   docs\adr\              ← 架构决策记录（0001~0005）
+  docs\architecture.html ← 架构白皮书（静态文档）
+  docs\architecture-diagram.html ← 交互式架构图（archify 生成，含引导视角）
+  docs\architecture-diagram.json ← 架构图源规格（改此文件后重新渲染）
   hooks\pre-commit       ← 提交前敏感闸门
   tests\                 ← 自测（28 项）
 ```
