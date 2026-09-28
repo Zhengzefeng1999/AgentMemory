@@ -12,6 +12,7 @@ AgentMemory memory_tool — 记忆库读写检索工具 v2（纯 Python 标准�
   archive       归档条目
   list          列出分类下条目
   health        记忆库健康报告
+  consolidate   周整理入口（委托 scripts/consolidate.py，独立进程+超时防挂起）
   daemon        启动常驻本地服务（快速写入 + PRELOAD + 飞书桥）
 
 v2 变更（见 docs/adr/）:
@@ -22,6 +23,11 @@ v2 变更（见 docs/adr/）:
   - 写入时本地相似度冲突检测（热路径零 LLM，Q3/Q5）
   - search --synthesize: LLM 综合回答 + 强制来源标注（Q8，冷路径）
   - get 刷新 last_accessed（Q9 双信号读取侧）
+
+v2.1 变更:
+  - 溯源标签: add/capture 自动附加 project:<git根目录> 与 agent:<来源>（纯本地 stat+env，零子进程，ADR-0005）
+  - 更正流: capture/add --supersedes <旧条目id|path> 一步完成「写入新条目 + 旧条目标 invalidated+superseded_by」（ADR-0001 belief 演化路径）
+  - consolidate 子命令: 从 memory_tool 同一入口跑周整理（auto=零LLM / llm=批量提炼），subprocess+timeout 永不挂起
 """
 import argparse
 import datetime
@@ -272,7 +278,88 @@ def find_local_conflicts(title, body, conn, threshold=0.6):
     cands.sort(key=lambda x: -x["overlap"])
     return cands[:3]
 
+# ---- 溯源标签（v2.1；纯本地：向上 stat 找 .git + 环境变量扫描，零子进程零网络，ADR-0005） ----
+
+_AGENT_ENV = [
+    ("agent:pi",          lambda e: any(k.startswith("PI_") for k in e)),
+    ("agent:claude-code", lambda e: "CLAUDECODE" in e or "CLAUDE_CODE_ENTRYPOINT" in e),
+    ("agent:codebuddy",   lambda e: any(k.startswith("CODEBUDDY_") for k in e)),
+    ("agent:codex",       lambda e: "CODEX_SANDBOX" in e or any(k.startswith("CODEX_") for k in e)),
+]
+
+def _git_root(start=None, max_up=12):
+    """向上找 .git（目录或文件）返回仓库根；没有则 None。仅 stat 调用，µs 级。"""
+    d = os.path.abspath(start or os.getcwd())
+    for _ in range(max_up):
+        if os.path.exists(os.path.join(d, ".git")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return None
+
+def _context_tags(cwd=None):
+    """capture/add 自动附加的溯源标签：project:<git根目录名> + agent:<来源>。
+    无 git 则不打 project 标签（避免把 repositories 这类杂目录名当项目）。"""
+    tags = []
+    root = _git_root(cwd)
+    if root:
+        name = os.path.basename(root).strip()
+        if name:
+            tags.append(f"project:{name}")
+    env = os.environ
+    for tag, test in _AGENT_ENV:
+        try:
+            if test(env):
+                tags.append(tag)
+                break
+        except Exception:
+            pass
+    return tags
+
+def _merge_context_tags(tags):
+    """溯源标签并入 tags：去重、用户标签在前、溯源置尾。"""
+    out = [t for t in (tags or []) if t and t.strip()]
+    for ct in _context_tags():
+        if ct not in out:
+            out.append(ct)
+    return out
+
 # ---- 命令实现 ----
+
+def _resolve_entry_path(ref):
+    """<arg_value><b88a6f17>按 uid 或相对 path 解析条目文件绝对路径；找不到返回 None。零 LLM。"""
+    conn = get_conn(); init_schema(conn)
+    row = conn.execute("SELECT path FROM entries WHERE uid=? OR path=? LIMIT 1", (ref, ref)).fetchone()
+    conn.close()
+    if row:
+        fp = os.path.join(BANK_DIR, row[0])
+        return fp if os.path.exists(fp) else None
+    # 文件系统兜底：手写/未重建索引的条目也能被 --supersedes 引用（防越界：必须仍在 bank 内）
+    if isinstance(ref, str) and ref.strip() and not os.path.isabs(ref):
+        fp = os.path.abspath(os.path.join(BANK_DIR, ref.replace("\\", "/")))
+        if fp.startswith(os.path.abspath(BANK_DIR) + os.sep) and os.path.isfile(fp):
+            return fp
+    return None
+
+def _apply_supersedes(old_ref, new_rel):
+    """旧条目标记 invalidated + superseded_by=new_rel（ADR-0001 演化路径）。返回 (ok, msg)。"""
+    fp = _resolve_entry_path(old_ref)
+    if not fp:
+        return False, f"未找到被替代条目: {old_ref}"
+    with open(fp, encoding="utf-8") as f:
+        text = f.read()
+    meta, body = parse_frontmatter(text)
+    meta["status"] = "invalidated"
+    meta["superseded_by"] = new_rel
+    meta["updated_at"] = now_str()
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write(build_frontmatter(meta, body))
+    conn = get_conn(); init_schema(conn)
+    index_file(conn, fp, meta, body)
+    conn.commit(); conn.close()
+    return True, f"旧条目已失效并指向新条目: {entry_rel_path(fp)} → {new_rel}"
 
 def _build_meta(title, tags, category, confidence, source, secret, mtype, pinned):
     return {
@@ -344,6 +431,7 @@ def cmd_add(args):
                 pass
     category = args.category or infer_category(title, body)
     tags = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else infer_tags(title, body)
+    tags = _merge_context_tags(tags)  # v2.1 溯源标签（project/agent）
 
     # 安全网①：写前拦截（Q7）
     ok, mark_msg = pre_write_security_check(title, body)
@@ -357,6 +445,12 @@ def cmd_add(args):
     meta = _build_meta(title, tags, category, args.confidence, args.source, secret, mtype, False)
     if args.secret and category == "knowledge":
         print("⚠️ 提醒：secret 条目不会出现在检索摘要，也不会发给 LLM 提炼")
+
+    # v2.1 更正流：--supersedes 先验后写（目标不存在则拒绝，避免写完接不上链）
+    sup_ref = getattr(args, "supersedes", None)
+    if sup_ref and not _resolve_entry_path(sup_ref):
+        print(f"错误：--supersedes 指向的条目不存在: {sup_ref}")
+        return 1
 
     # 热路径冲突检测（本地相似度）
     conn = get_conn(); init_schema(conn)
@@ -379,6 +473,9 @@ def cmd_add(args):
 
     rel = _write_entry(meta, body)
     print(f"已添加: {rel}  type={meta['type']} category={meta['category']}" + (" 🔒secret" if secret else ""))
+    if sup_ref:
+        ok, msg = _apply_supersedes(sup_ref, rel)
+        print(("✓ " + msg) if ok else ("⚠️ " + msg))
     return 0
 
 def cmd_capture(args):
@@ -393,6 +490,7 @@ def cmd_capture(args):
         mtype = args.type
     category = args.category or infer_category(title, body)
     tags = args.tags.split(",") if args.tags else infer_tags(title, body)
+    tags = _merge_context_tags(tags)  # v2.1 溯源标签（project/agent）
 
     ok, mark_msg = pre_write_security_check(title, body)
     if not ok:
@@ -411,6 +509,10 @@ def cmd_capture(args):
 
     rel = _write_entry(meta, body)
     print(f"已捕获: {rel}  type={meta['type']} category={meta['category']}" + (" 🔒secret" if secret else ""))
+    sup_ref = getattr(args, "supersedes", None)
+    if sup_ref:
+        ok, msg = _apply_supersedes(sup_ref, rel)
+        print(("✓ " + msg) if ok else ("⚠️ " + msg))
     return 0
 
 def cmd_search(args):
@@ -557,6 +659,31 @@ def rebuild_if_empty(conn):
         rebuild_index(verbose=False)
         return get_conn()
     return conn
+
+def cmd_consolidate(args):
+    """consolidate — 周整理入口（委托 scripts/consolidate.py）。独立进程 + 超时，永不挂起（ADR-0005 批处理路径）。"""
+    import subprocess as sp
+    script = os.path.join(SCRIPTS, "consolidate.py")
+    if not os.path.exists(script):
+        print(f"未找到 {script}")
+        return 1
+    timeout = args.timeout or (900 if args.mode == "llm" else 180)
+    cmd = [sys.executable, script, "--mode", args.mode]
+    if args.report:
+        cmd.append("--report")
+    print(f"→ consolidate --mode {args.mode}（超时 {timeout}s；auto=零LLM 周整理 / llm=批量提炼冷路径）", flush=True)
+    try:
+        # 不捕获输出：子进程直接写终端，进度实时可见，避免“沉默等待像卡死”
+        r = sp.run(cmd, cwd=ROOT, timeout=timeout)
+    except sp.TimeoutExpired:
+        print(f"⚠️ consolidate 超时（>{timeout}s）已终止。可加大 --timeout 重试，或单独运行 scripts/consolidate.py")
+        return 3
+    except FileNotFoundError:
+        print(f"错误：无法启动 Python: {sys.executable}")
+        return 1
+    if r.returncode != 0:
+        print(f"consolidate 退出码 {r.returncode}")
+    return r.returncode
 
 def cmd_get(args):
     conn = get_conn()
@@ -707,6 +834,7 @@ def main():
     pa.add_argument("--body")
     pa.add_argument("--secret", action="store_true", help="标记为敏感条目")
     pa.add_argument("--auto", action="store_true", help="自动模式：永不交互（自动捕获用）")
+    pa.add_argument("--supersedes", help="v2.1 更正流：被本条替代的旧条目 id/path（写入后自动标 invalidated+superseded_by）")
     pa.set_defaults(func=cmd_add)
 
     pc = sub.add_parser("capture", help="自动捕获（agent 会话中调用，--auto 语义）")
@@ -720,6 +848,7 @@ def main():
     pc.add_argument("--body")
     pc.add_argument("--secret", action="store_true")
     pc.add_argument("--auto", action="store_true", help="自动模式：永不交互（默认即此语义）")
+    pc.add_argument("--supersedes", help="v2.1 更正流：被本条替代的旧条目 id/path（写入后自动标 invalidated+superseded_by）")
     pc.set_defaults(func=cmd_capture)
 
     ps = sub.add_parser("search", help="检索记忆")
@@ -730,6 +859,12 @@ def main():
     ps.add_argument("--json", action="store_true")
     ps.add_argument("--synthesize", action="store_true", help="LLM 综合回答（冷路径，强制来源标注）")
     ps.set_defaults(func=cmd_search)
+
+    pcon = sub.add_parser("consolidate", help="周整理（auto=零LLM规则整理 / llm=批量提炼；独立进程+超时防挂起）")
+    pcon.add_argument("--mode", choices=["auto", "llm"], default="auto")
+    pcon.add_argument("--report", action="store_true")
+    pcon.add_argument("--timeout", type=int, default=0, help="秒；0=按模式取默认（auto 180 / llm 900）")
+    pcon.set_defaults(func=cmd_consolidate)
 
     pg = sub.add_parser("get", help="读取全文")
     pg.add_argument("id")
