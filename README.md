@@ -2,7 +2,8 @@
 
 > 可移植、零依赖、低成本、自进化的 Agent 会话记忆库。
 > 突破 pi memory 5000 chars 限制，任何 Agent 客户端（pi / Claude Code / CodeBuddy）可读写同一套记忆。
-> v2：自动捕获 + 类型体系 + 三层安全网 + 双信号生命周期 + 本地 daemon（架构决策见 `docs/adr/`）
+> v2：自动捕获 + 类型体系 + 三层安全网 + 双信号生命周期 + 本地 daemon
+> **v2.1：溯源标签（project/agent）+ 更正流（--supersedes）+ consolidate 统一入口**（架构决策见 `docs/adr/`）
 
 ## 架构总览
 
@@ -21,7 +22,17 @@
 > 图源规格：[docs/architecture-diagram.json](docs/architecture-diagram.json)，架构变更后重新生成：
 > `node ~/.pi/agent/skills/archify/bin/archify.mjs render architecture docs/architecture-diagram.json docs/architecture-diagram.html --quality showcase`
 
-## v2 新增能力
+## 版本能力
+
+### v2.1 新增
+
+| 能力 | 说明 | 决策 |
+|---|---|---|
+| **溯源标签** | add/capture 自动附加 `project:<git根目录>` + `agent:<来源>`，检索 `--tag project:xxx` 精确过滤；零子进程零 LLM | ADR-0006 |
+| **更正流** | `--supersedes <旧条目>` 一步完成写入新条 + 旧条目标失效并指回；检索不再返回错误旧条 | ADR-0006 |
+| **consolidate 统一入口** | `memory_tool.py consolidate` 委托周整理，subprocess+超时有界执行，永不挂起 | ADR-0006 |
+
+### v2 新增
 
 | 能力 | 说明 | 决策 |
 |---|---|---|
