@@ -265,6 +265,8 @@
       <div class="chip">捕获 <b>全自动</b>（会话中自主写入）</div>
       <div class="chip">防线 <b>三层</b>（写前/周扫/闸门）</div>
       <div class="chip">写入 <b>~100ms</b>（daemon 常驻）</div>
+      <div class="chip">更正 <b>一条命令</b>（--supersedes）</div>
+      <div class="chip">溯源 <b>自动</b>（project/agent 标签）</div>
     </div>
   </header>
 
@@ -327,8 +329,8 @@
     <div class="grid-3">
       <div class="rule b1 reveal">
         <div class="r-top"><div class="r-ic">⚖️</div><div><div class="r-no">BOTTOM LINE 01</div><h3>类型分层 · 冲突立场</h3></div></div>
-        <p>条目分三类：<b>事实类</b>（可附外部依据，由你拍板）、<b>认知类</b>（保留沿革链 superseded_by，不静默覆盖）、<b>偏好类</b>（永不纠正）。系统给结论，你查依据——不做应声虫。</p>
-        <div class="kws"><span class="kw">fact/belief/preference</span><span class="kw">冲突卡</span><span class="kw">沿革可追溯</span></div>
+        <p>条目分三类：<b>事实类</b>（可附外部依据，由你拍板）、<b>认知类</b>（保留沿革链 superseded_by，不静默覆盖；发现记错时 <b>--supersedes 一条命令完成更正</b>，旧条自动失效并指回新条）、<b>偏好类</b>（永不纠正）。系统给结论，你查依据——不做应声虫。</p>
+        <div class="kws"><span class="kw">fact/belief/preference</span><span class="kw">冲突卡</span><span class="kw">沿革可追溯</span><span class="kw">更正流 --supersedes</span></div>
         <div class="ex">💡 你检索时会撞见自己的认知演化历史，而不是自我重复的回声室</div>
       </div>
       <div class="rule b2 reveal">
@@ -405,8 +407,9 @@
     <div class="scene-grid">
       <div class="scene reveal">
         <div class="s-head"><div class="s-ic">🛟</div><h3>踩坑的瞬间</h3><span class="s-tag s-auto">全自动</span></div>
-        <p>agent 会话中发现踩坑/被纠正/新知识 → <b>自主 capture 写入</b>，无需确认；写前安全拦截自动标记敏感内容。</p>
-        <div class="demo"><span class="k">capture</span> --body <span class="v">"Excel 打开大断面 CSV 要用 utf-8-sig"</span> <span class="c"># 类型/分类自动推断</span></div>
+        <p>agent 会话中发现踩坑/被纠正/新知识 → <b>自主 capture 写入</b>，无需确认；写前安全拦截自动标记敏感内容，并自动附 <b>project/agent 溯源标签</b>（检索可按项目过滤）。发现以前的记忆错了？<b>--supersedes 一步更正</b>：旧条自动标失效并指回，检索不再返回错误版本。</p>
+        <div class="demo"><span class="k">capture</span> --body <span class="v">"Excel 打开大断面 CSV 要用 utf-8-sig"</span> <span class="c"># 类型/分类/溯源标签自动推断</span></div>
+        <div class="demo"><span class="k">capture</span> --body <span class="v">"更正：xxx 实际是 yyy"</span> --supersedes <span class="v">lessons/failures/旧条.md</span> <span class="c"># 错误旧条自动失效</span></div>
       </div>
       <div class="scene reveal">
         <div class="s-head"><div class="s-ic">🔍</div><h3>需要的瞬间</h3><span class="s-tag s-auto">自动</span></div>
@@ -415,8 +418,8 @@
       </div>
       <div class="scene reveal">
         <div class="s-head"><div class="s-ic">📅</div><h3>每周的瞬间</h3><span class="s-tag s-say">喊一声</span></div>
-        <p>consolidate 自动完成：双信号衰减、去重、敏感补扫、语义冲突→冲突卡（你拍板）、模式→SKILL 草稿。</p>
-        <div class="demo"><span class="k">consolidate</span> --mode <span class="v">llm</span> <span class="c"># 一次跑完五件事</span></div>
+        <p>consolidate 自动完成：双信号衰减、去重、敏感补扫、语义冲突→冲突卡（你拍板）、模式→SKILL 草稿。v2.1 起从 memory_tool 统一入口进——独立进程加强制超时，<b>永不挂起</b>。</p>
+        <div class="demo"><span class="k">memory_tool consolidate</span> --mode <span class="v">llm</span> <span class="c"># 一次跑完五件事，自带超时防护</span></div>
       </div>
     </div>
   </section>
