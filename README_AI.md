@@ -57,7 +57,7 @@ cp .env.example .env
 ```
 ✅ AgentMemory 记忆系统已部署
 - 位置: <安装目录>
-- 状态: 自测 28/28 通过，索引正常
+- 状态: 自测 48/48 通过，索引正常
 - 使用: python scripts/memory_tool.py add/search/get/consolidate ...
 - SKILL: 已注册 memory-bank（下次会话生效）
 - 三条底线: 失败驱动检索 / 摘要导航 / 冲突优先

@@ -112,9 +112,15 @@ merged = mt._merge_context_tags(["水文", "project:假项目甲"])
 check("溯源: 合并去重且用户标签在前", merged[0] == "水文" and merged.count("project:假项目甲") == 1, str(merged))
 
 # ---- 2. 更正流 capture --supersedes（端到端 CLI） ----
+# 环境无关：源仓库/裸解压目录都能跑。capture 的 cwd 只影响溯源标签
+# （memory_tool 的 bank 路径由脚本自身位置推导，与 cwd 无关），
+# 故在临时 git 仓库里跑，project 标签确定性为 project:amv3git。
+import tempfile as _tf
+_gitdir = _tf.mkdtemp(prefix="amv3git")
+os.makedirs(os.path.join(_gitdir, ".git"), exist_ok=True)
 old_rel = write_tmp_entry({"title": "v3test-旧结论-将被更正"}, "旧结论：GitHub 在本机不可用。")
 r = run_cli("capture", "--body", "更正：GitHub 经 Steam++ 代理可用，git clone 正常。（v3test）",
-            "--title", "v3test-更正GitHub可用", "--supersedes", old_rel)
+            "--title", "v3test-更正GitHub可用", "--supersedes", old_rel, cwd=_gitdir)
 out = r.stdout + r.stderr
 check("更正流: capture 退出码 0", r.returncode == 0, out[-200:])
 check("更正流: 提示旧条目已失效", "已失效并指向新条目" in out, out[-200:])
@@ -131,7 +137,7 @@ if new_rel:
     m_new = read_meta(new_rel)
     raw_tags = m_new.get("tags", [])
     tag_list = raw_tags if isinstance(raw_tags, list) else [t.strip() for t in str(raw_tags).split(",")]
-    check("更正流: 新条目带 project 溯源标签", any(str(t).startswith("project:") for t in tag_list),
+    check("更正流: 新条目带 project 溯源标签", any(str(t).startswith("project:amv3git") for t in tag_list),
           str(tag_list))
     # search 不再返回失效旧条目
     rs = run_cli("search", "v3test", "--json")
@@ -166,6 +172,7 @@ check("consolidate: dispatch 已接通且有界执行", rd.returncode in (0, 3),
 
 # ---- 清理 ----
 removed = cleanup_and_reindex()
+import shutil as _sh; _sh.rmtree(_gitdir, ignore_errors=True)
 leftover = glob.glob(os.path.join(ROOT, "bank", "**", "*v3test*"), recursive=True)
 check("清理: 无测试残留", not leftover, str(leftover))
 

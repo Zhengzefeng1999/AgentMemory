@@ -15,7 +15,7 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSION = "1.0.0"
+VERSION = "2.1.0"
 
 # 分发包内文件清单（架构部分）
 INCLUDE_FILES = [
@@ -23,16 +23,20 @@ INCLUDE_FILES = [
     "README_AI.md",
     "CONTEXT.md",
     "docs/architecture.html",
+    "docs/architecture-diagram.html",
+    "docs/multi-device-sync.md",
     "docs/adr/0001-entry-types-and-conflict-stance.md",
     "docs/adr/0002-three-layer-security-net.md",
     "docs/adr/0003-dual-signal-lifecycle.md",
     "docs/adr/0004-daemon-and-feishu-bridge.md",
     "docs/adr/0005-llm-never-in-hot-path.md",
+    "docs/adr/0006-provenance-tags-and-supersede-flow.md",
     ".gitignore",
     ".env.example",
     "config.json",
-    "SKILL.md.template",
-    "hooks/pre-commit",
+    # 注：SKILL.md.template 与 hooks/pre-commit 不入此清单 ——
+    # 它们在下方由特判逻辑写入（SKILL 会做 <MEMORY_ROOT> 路径消毒，hook 取 .git/hooks 版），
+    # 若在此重复写入会产生重复 zip 条目（v1.0.0 遗留问题，v2.1.0 修复）
     "scripts/memory_tool.py",
     "scripts/build_index.py",
     "scripts/consolidate.py",
@@ -41,9 +45,11 @@ INCLUDE_FILES = [
     "scripts/build_preload.py",
     "scripts/infer.py",
     "scripts/security_rules.py",
+    "scripts/sync_memory.py",
     "tests/test_memory_tool.py",
     "tests/test_consolidate.py",
     "tests/test_v2.py",
+    "tests/test_v3_context.py",
 ]
 
 SAMPLE_BANK = {
@@ -198,6 +204,8 @@ python scripts/build_index.py        # 重建索引
 python scripts/memory_tool.py health # 验证（应显示示例条目）
 python tests/test_memory_tool.py     # 自测（6 项）
 python tests/test_consolidate.py     # consolidate 窗口过滤回归测试（7 项）
+python tests/test_v2.py              # v2 回归（15 项）
+python tests/test_v3_context.py      # v2.1 回归：溯源标签/更正流/有界执行（20 项）
 git init && git add -A && git commit -m "init"   # 建立版本管理
 ```
 
@@ -207,12 +215,17 @@ git init && git add -A && git commit -m "init"   # 建立版本管理
 python scripts/memory_tool.py add --title "第一条记忆" --tags "a,b" --category knowledge --body "内容"
 python scripts/memory_tool.py search "关键词"
 python scripts/memory_tool.py list --category knowledge
+
+# v2.1 溯源：在 git 仓库里写入时自动附 project:<仓库名> + agent:<来源> 标签，可 --tag project:xxx 过滤
+# v2.1 更正：发现旧记忆错了，一条命令闭环（旧条自动标失效并指回，检索不再返回它）
+python scripts/memory_tool.py capture --body "更正：xxx 实际是 yyy" --supersedes bank/lessons/failures/旧条.md
 ```
 
 ## 6. 日常运维
 
-- 每周整理：`python scripts/consolidate.py --mode auto`（规则，零成本）
-- 或带提炼：`python scripts/consolidate.py --mode llm`（用 .env 的 key）
+- 每周整理（v2.1 统一入口，subprocess+超时永不挂起）：`python scripts/memory_tool.py consolidate --mode auto`（规则，零成本）
+- 或带提炼：`python scripts/memory_tool.py consolidate --mode llm`（用 .env 的 key）
+- 多设备同步（可选）：`python scripts/sync_memory.py`（先 pull --rebase 再 commit 再 push，绝不 force）
 - 敏感记忆：`add --secret`（摘要隐藏、不发给 LLM、get 需 --force）
 - 安全：`.env` 已被 gitignore 排除 + pre-commit 钩子防 key 误提交（钩子随 git init 后自动生效；如需重新安装，把 `.git/hooks` 从模板的 `hooks/pre-commit` 复制）
 
@@ -220,12 +233,13 @@ python scripts/memory_tool.py list --category knowledge
 
 | 文件 | 说明 |
 |------|------|
-| `scripts/memory_tool.py` | 核心工具：add/search/get/update/archive/list/health |
+| `scripts/memory_tool.py` | 核心工具：add/capture/search/get/update/archive/list/health/consolidate |
 | `scripts/build_index.py` | 重建 SQLite 索引（文件被外部编辑后跑） |
 | `scripts/consolidate.py` | 整理：合并重复/淘汰过期/提炼 skill 候选 |
+| `scripts/sync_memory.py` | 多设备同步（pull --rebase → commit → push，防覆盖） |
 | `config.json` | 检索阈值、三档模式、LLM 配置 |
 | `bank/` | 记忆库骨架（含 _SAMPLE_ 示例条目，可删） |
-| `tests/` | 自测脚本 |
+| `tests/` | 自测脚本（4 套 48 项） |
 
 ## 架构说明
 
@@ -233,6 +247,8 @@ python scripts/memory_tool.py list --category knowledge
 - 脚本用自身位置推导根目录，**任何路径可部署**
 - 检索本地 SQLite FTS，零 LLM token；记忆按需展开
 - 三条底线：失败驱动检索 / 摘要导航 / 冲突优先
+- v2.1：溯源标签（project/agent，写入自动附加）+ 更正流（--supersedes 一步闭环）+ consolidate 统一入口（有界执行永不挂起）——热路径仍零 LLM 零网络（ADR-0005/0006）
+- 架构决策全录：`docs/adr/0001-0006`；交互图 `docs/architecture-diagram.html`；白皮书 `docs/architecture.html`
 """
 
 

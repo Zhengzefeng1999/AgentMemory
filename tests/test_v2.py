@@ -105,10 +105,12 @@ with open(os.path.join(ROOT, "bank", rel4), encoding="utf-8") as f:
 check("frontmatter: 15+ 字段完整往返", meta.get("title", "").startswith("v2test") and meta.get("type") == "fact"
       and meta.get("pinned") is True and meta.get("superseded_by") == "x.md", str(meta)[:200])
 
-# 6. 幂等重建索引
-from memory_tool import rebuild_index
+# 6. 幂等重建索引（环境无关：重建数应等于 bank 里实际的 .md 文件数，
+#    而非某个固定存量阈值——模板包只有 5 条示例也能验证）
+from memory_tool import rebuild_index, all_entry_files
+_expected = len([f for f in all_entry_files()])
 n = rebuild_index(verbose=False)
-check("索引重建", n >= 15, str(n))
+check("索引重建(重建数=实际文件数)", n == _expected, f"indexed={n} files={_expected}")
 
 cleanup()
 rebuild_index(verbose=False)  # cleanup 只删文件；重建索引清除孤儿行，避免污染生产索引（health/pinned 计数）
