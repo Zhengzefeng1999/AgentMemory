@@ -58,7 +58,7 @@ cp .env.example .env
 ✅ AgentMemory 记忆系统已部署
 - 位置: <安装目录>
 - 状态: 自测 28/28 通过，索引正常
-- 使用: python scripts/memory_tool.py add/search/get ...
+- 使用: python scripts/memory_tool.py add/search/get/consolidate ...
 - SKILL: 已注册 memory-bank（下次会话生效）
 - 三条底线: 失败驱动检索 / 摘要导航 / 冲突优先
 ```
@@ -69,9 +69,10 @@ cp .env.example .env
 
 1. **失败驱动检索**：工具报错/命令失败 → 先查 `bank/lessons/failures/`；用户纠正 → 写 `bank/lessons/corrections/`
 2. **摘要导航**：检索只读摘要，不全文展开；低置信度条目只提示"可核实"
-3. **冲突优先**：记忆与当前证据冲突时以当前证据为准
+3. **冲突优先**：记忆与当前证据冲突时以当前证据为准；**发现旧记忆错误时用更正流一步闭环，不要只写新条目**：
+   `capture --body "更正内容" --supersedes <旧条目path>`（旧条自动标失效并指回，检索不再返回它）
 4. **敏感记忆**：用户要求保密的内容 → `add --secret`（摘要隐藏、不发给 LLM、get 需 --force）
-5. **成本控制**：检索本地零 token；只有用户明确要"整理记忆"时才跑 consolidate（auto 零成本 / llm 用 key）
+5. **成本控制**：检索本地零 token；只有用户明确要"整理记忆"时才跑 consolidate（auto 零成本 / llm 用 key）；`memory_tool.py consolidate --mode auto` 统一入口，自带超时不会挂起
 
 ## 常见问题排查
 

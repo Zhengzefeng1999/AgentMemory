@@ -33,6 +33,9 @@
 | **PRELOAD 预热** | pinned 常驻 + 近 7 天动态，≤200 行，会话启动注入 | ADR-0004 |
 | **综合检索** | `search --synthesize`：LLM 回答强制带 `[来源:path]`，无记录明说 | ADR-0005 |
 | **Skill 草稿** | CANDIDATES 命中 → 自动生成 SKILL.md 草稿（candidates/），人工启用 | ADR-0001 |
+| **溯源标签** | add/capture 自动附加 `project:<git根目录>` + `agent:<来源>`，检索 `--tag project:xxx` 精确过滤；零子进程零 LLM | ADR-0006 |
+| **更正流** | `--supersedes <旧条目>` 一步完成写入新条 + 旧条目标失效并指回；检索不再返回错误旧条 | ADR-0006 |
+| **consolidate 统一入口** | `memory_tool.py consolidate` 委托周整理，subprocess+超时有界执行，永不挂起 | ADR-0006 |
 
 **性能红线**：热路径（add/search/get）零 LLM、零网络，仅本地正则/SQL；LLM 只出现在 consolidate 周整理与 synthesize 冷路径（ADR-0005）。
 
@@ -55,7 +58,7 @@ AgentMemory\
     CONFLICTS.md         ← 冲突卡（LLM 语义冲突，待你决策）
     INDEX.db             ← SQLite 索引（gitignore，可重建）
   scripts\               ← 纯 Python 标准库工具
-    memory_tool.py       ← add/capture/search/get/update/archive/list/health
+    memory_tool.py       ← add/capture/search/get/update/archive/list/health/consolidate
     daemon.py            ← 本地常驻服务（快速写入 + PRELOAD + 飞书桥）
     build_preload.py     ← PRELOAD 预热生成器（pinned + 近 7 天）
     infer.py             ← 类型/分类/tags 启发式推断（热路径零 LLM）
@@ -81,8 +84,11 @@ python scripts/memory_tool.py health
 # 极简写入（一句话降级：title=首句，type/category/tags 自动推断）
 python scripts/memory_tool.py add "河网密度=水系总长/流域面积，规范公式"
 
-# 自动捕获（agent 会话中用；永不交互，写前安全拦截）
+# 自动捕获（agent 会话中用；永不交互，写前安全拦截；自动附 project/agent 溯源标签）
 python scripts/memory_tool.py capture --body "今天踩坑：Excel 打开大断面 CSV 时编码要用 utf-8-sig"
+
+# 更正旧记忆（发现以前记错了：写更正 + 旧条自动标失效并指回，检索不再返回错误旧条）
+python scripts/memory_tool.py capture --body "更正：xxx 实际是 yyy" --supersedes lessons/failures/旧条目.md
 
 # 搜索（本地 FTS 零 token）/ 综合回答（LLM，结论带来源）
 python scripts/memory_tool.py search "水位基面"
@@ -102,8 +108,9 @@ curl -X POST http://127.0.0.1:8123/memory -H "Content-Type: application/json" -d
 python scripts/build_preload.py && type PRELOAD.md
 
 # 每周整理（auto=规则零成本；llm=提炼/冲突/补扫/草稿）
-python scripts/consolidate.py --mode auto
-python scripts/consolidate.py --mode llm
+# v2.1 起从 memory_tool 统一入口进（subprocess+超时，永不挂起）
+python scripts/memory_tool.py consolidate --mode auto
+python scripts/memory_tool.py consolidate --mode llm
 ```
 
 ## 配置

@@ -18,6 +18,7 @@
 - **冲突检测** - 发现两条条目对同一主题持不同看法的机制。分两级：写入时本地相似度检测（热路径），consolidate 时 LLM 语义检测（冷路径）。
 - **冲突卡（Conflict Card）** - 冲突检测产出的决策单：旧观点 + 新观点 + 依据，由用户拍板。不静默覆盖。
 - **沿革链（superseded_by）** - 认知类条目被新理解替代时，旧条目保留并通过 `superseded_by` 指向新条目，形成可回溯的认知演化轨迹。
+- **更正流（--supersedes）** - 沿革链的一步化操作：`capture/add --supersedes <旧条目>` 同时完成「写入新条目 + 旧条目标失效并指向新条」。两条路径语义不同：add 先验后写（目标不存在则拒绝），capture 宽容（写入后警告，更正内容不丢）。见 ADR-0006。
 - **失效（Invalidated）** - 用户显式标记条目为已推翻（区别于归档 archive）。失效条目不出现在检索结果，可 `--include-invalid` 查看。
 
 ## 生命周期
@@ -28,6 +29,7 @@
 ## 捕获与写入
 
 - **自动捕获（Auto Capture）** - agent 在会话中自主判断"值得记"并调用 capture 写入，无需用户确认（完全自动 + 安全网兜底）。
+- **溯源标签（Provenance Tags）** - add/capture 写入时自动附加的两类机器标签：`project:<git 根目录名>`（从 cwd 向上找 .git，纯 stat）与 `agent:<来源>`（环境变量扫描）。非 git 目录不打 project 标签（杂目录名是噪声）。检索可用 `--tag project:xxx` 精确过滤。零 LLM 零子进程（ADR-0005/0006）。
 - **极简写入（Minimal Add）** - `add "一句话"` 零参数写入：title=首句、category/tags/type 自动推断。低置信时手动路径交互确认一次；自动捕获路径（--auto）永不交互。
 - **本地守护进程（Daemon）** - 常驻 HTTP 服务（默认 :8123），消灭每次 spawn 的首次 SQLite 提交开销（1127ms → ~10ms）。同时承载 PRELOAD 生成与飞书桥。
 - **PRELOAD 预热** - 两级预热：`pinned` 常驻条目 + 近 7 天动态条目，≤200 行，会话启动时注入。

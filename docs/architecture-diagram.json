@@ -1,59 +1,485 @@
 {
-  "schema_version": 1,
-  "diagram_type": "architecture",
-  "meta": {
-    "title": "AgentMemory v2 · 跨 Agent 会话记忆银行",
-    "locale": "zh-CN",
-    "visual_preset": "signal-flow",
-    "viewBox": [1100, 690],
-    "views": [
-      { "id": "write-path", "label": "写一条记忆", "focus": ["clients", "cli", "sec", "infer", "bankmd", "git"], "note": "从「记：」触发到安全拦截、类型推断、落盘 bank/ 并同步 4 台设备的完整链路" },
-      { "id": "read-path", "label": "查一条记忆", "focus": ["clients", "cli", "fts", "preload"], "note": "本地索引毫秒级检索、会话启动自动注入预热，全程零大模型消耗" },
-      { "id": "cold-path", "label": "何时才用大模型", "focus": ["cli", "consol", "llm", "bankmd"], "note": "只有综合问答与每周整理走冷路径，成本可控有据" }
+ "schema_version": 1,
+ "diagram_type": "architecture",
+ "meta": {
+  "title": "AgentMemory v2.1 · 跨 Agent 会话记忆银行",
+  "locale": "zh-CN",
+  "visual_preset": "signal-flow",
+  "viewBox": [
+   1100,
+   690
+  ],
+  "views": [
+   {
+    "id": "write-path",
+    "label": "写一条记忆",
+    "focus": [
+     "clients",
+     "cli",
+     "sec",
+     "infer",
+     "bankmd",
+     "git"
     ],
-    "legend": {
-      "mode": "auto",
-      "entries": {
-        "external": { "label": "外部系统 / 客户端" },
-        "backend": { "label": "服务 / 脚本模块" },
-        "database": { "label": "数据存储" },
-        "security": { "label": "安全防护" },
-        "messagebus": { "label": "同步通道" },
-        "cloud": { "label": "云端服务" }
-      }
+    "note": "从「记：」触发到安全拦截、类型推断、溯源标签（project/agent）、落盘 bank/ 并同步 4 台设备的完整链路；发现写错可 --supersedes 一步更正"
+   },
+   {
+    "id": "read-path",
+    "label": "查一条记忆",
+    "focus": [
+     "clients",
+     "cli",
+     "fts",
+     "preload"
+    ],
+    "note": "本地索引毫秒级检索、会话启动自动注入预热，全程零大模型消耗"
+   },
+   {
+    "id": "cold-path",
+    "label": "何时才用大模型",
+    "focus": [
+     "cli",
+     "consol",
+     "llm",
+     "bankmd"
+    ],
+    "note": "只有综合问答与每周整理走冷路径，成本可控有据"
+   }
+  ],
+  "legend": {
+   "mode": "auto",
+   "entries": {
+    "external": {
+     "label": "外部系统 / 客户端"
+    },
+    "backend": {
+     "label": "服务 / 脚本模块"
+    },
+    "database": {
+     "label": "数据存储"
+    },
+    "security": {
+     "label": "安全防护"
+    },
+    "messagebus": {
+     "label": "同步通道"
+    },
+    "cloud": {
+     "label": "云端服务"
     }
+   }
+  }
+ },
+ "components": [
+  {
+   "id": "clients",
+   "type": "external",
+   "label": "AI 客户端 ×4 台设备",
+   "sublabel": "pi · Claude Code · CodeBuddy",
+   "pos": [
+    340,
+    65
+   ],
+   "size": [
+    190,
+    60
+   ]
   },
-  "components": [
-    { "id": "clients", "type": "external", "label": "AI 客户端 ×4 台设备", "sublabel": "pi · Claude Code · CodeBuddy", "pos": [340, 65], "size": [190, 60] },
-    { "id": "cli", "type": "backend", "label": "命令行入口", "sublabel": "memory_tool.py · 增/捕/查/取", "pos": [60, 205], "size": [170, 60] },
-    { "id": "daemon", "type": "backend", "label": "后台常驻服务", "sublabel": "daemon.py :8123 · 飞书桥", "pos": [345, 205], "size": [180, 60] },
-    { "id": "preload", "type": "database", "label": "会话预热文件", "sublabel": "置顶 + 近7天 ≤200行", "pos": [620, 205], "size": [140, 60] },
-    { "id": "sec", "type": "security", "label": "安全规则引擎", "sublabel": "拦截·标记 两级防线", "pos": [220, 355], "size": [140, 60] },
-    { "id": "infer", "type": "backend", "label": "类型推断引擎", "sublabel": "infer.py · 类型/分类/标签", "pos": [455, 355], "size": [140, 60] },
-    { "id": "consol", "type": "backend", "label": "每周自动整理", "sublabel": "consolidate.py · 双信号生命周期", "pos": [620, 355], "size": [160, 60] },
-    { "id": "llm", "type": "cloud", "label": "大模型 DeepSeek", "sublabel": "仅冷路径：综合问答·周整理", "pos": [850, 355], "size": [140, 60] },
-    { "id": "fts", "type": "database", "label": "全文检索索引", "sublabel": "INDEX.db · SQLite 本地毫秒级", "pos": [60, 505], "size": [150, 60] },
-    { "id": "bankmd", "type": "database", "label": "记忆库 bank/（真相层）", "sublabel": "用户画像·项目·经验教训", "pos": [345, 505], "size": [180, 60] },
-    { "id": "git", "type": "messagebus", "label": "git 多设备同步", "sublabel": "提交前闸门 · 4台设备 拉取→推送", "pos": [860, 505], "size": [140, 60] }
-  ],
-  "boundaries": [
-    { "kind": "region", "label": "热路径 · 零大模型 · 零联网", "wraps": ["cli", "daemon", "infer", "sec", "fts"] },
-    { "kind": "region", "label": "冷路径 · 唯一大模型出口", "wraps": ["consol", "llm"] },
-    { "kind": "security-group", "label": "三层安全网", "wraps": ["sec"] }
-  ],
-  "connections": [
-    { "id": "invoke", "from": "clients", "to": "cli", "label": "「查：/记：」触发", "variant": "emphasis" },
-    { "id": "fastwrite", "from": "clients", "to": "daemon", "label": "自动捕获 · 约百毫秒落库", "fromSide": "bottom", "toSide": "top", "via": [[435, 165]] },
-    { "id": "read-preload", "from": "clients", "to": "preload", "label": "会话启动时读取", "fromSide": "right", "toSide": "top", "via": [[575, 95], [575, 155], [690, 155]] },
-    { "id": "gen-preload", "from": "daemon", "to": "preload", "label": "生成 ≤200行", "fromSide": "right", "toSide": "left" },
-    { "id": "guard", "from": "cli", "to": "sec", "label": "写入前拦截", "variant": "security", "fromSide": "right", "toSide": "top", "via": [[265, 235], [265, 315], [290, 315]] },
-    { "id": "inference", "from": "daemon", "to": "infer", "label": "自动推断类型标签", "fromSide": "left", "toSide": "top", "via": [[320, 235], [320, 285], [525, 285]], "labelAt": [365, 285] },
-    { "id": "search", "from": "cli", "to": "fts", "label": "本地搜索 · 零消耗", "fromSide": "left", "toSide": "left", "via": [[15, 235], [15, 535]], "labelAt": [40, 455] },
-    { "id": "write-md", "from": "cli", "to": "bankmd", "label": "写入记忆正文", "variant": "emphasis", "fromSide": "bottom", "toSide": "left", "via": [[145, 480], [310, 480], [310, 535]] },
-    { "id": "daemon-write", "from": "daemon", "to": "bankmd", "label": "快写落盘", "labelAt": [380, 340], "fromSide": "bottom", "toSide": "top", "via": [[435, 385]] },
-    { "id": "synthesize", "from": "cli", "to": "llm", "label": "综合问答 · 结论必带出处", "variant": "dashed", "fromSide": "top", "toSide": "top", "via": [[145, 45], [920, 45]] },
-    { "id": "weekly", "from": "consol", "to": "llm", "label": "近7天窗口", "variant": "dashed" },
-    { "id": "maintain", "from": "consol", "to": "bankmd", "label": "去重·归档·生成技能草稿", "fromSide": "bottom", "toSide": "right", "via": [[700, 535]] },
-    { "id": "push", "from": "bankmd", "to": "git", "label": "提交并推送 · 4台设备", "variant": "emphasis", "fromSide": "bottom", "toSide": "left", "via": [[435, 595], [820, 595], [820, 535]] }
-  ]
+  {
+   "id": "cli",
+   "type": "backend",
+   "label": "命令行入口",
+   "sublabel": "memory_tool.py · 增/捕/查/取/整理",
+   "pos": [
+    60,
+    205
+   ],
+   "size": [
+    170,
+    60
+   ]
+  },
+  {
+   "id": "daemon",
+   "type": "backend",
+   "label": "后台常驻服务",
+   "sublabel": "daemon.py :8123 · 飞书桥",
+   "pos": [
+    345,
+    205
+   ],
+   "size": [
+    180,
+    60
+   ]
+  },
+  {
+   "id": "preload",
+   "type": "database",
+   "label": "会话预热文件",
+   "sublabel": "置顶 + 近7天 ≤200行",
+   "pos": [
+    620,
+    205
+   ],
+   "size": [
+    140,
+    60
+   ]
+  },
+  {
+   "id": "sec",
+   "type": "security",
+   "label": "安全规则引擎",
+   "sublabel": "拦截·标记 两级防线",
+   "pos": [
+    220,
+    355
+   ],
+   "size": [
+    140,
+    60
+   ]
+  },
+  {
+   "id": "infer",
+   "type": "backend",
+   "label": "类型推断引擎",
+   "sublabel": "infer.py · 类型/分类/标签",
+   "pos": [
+    455,
+    355
+   ],
+   "size": [
+    140,
+    60
+   ]
+  },
+  {
+   "id": "consol",
+   "type": "backend",
+   "label": "每周自动整理",
+   "sublabel": "consolidate 统一入口 · 双信号生命周期",
+   "pos": [
+    620,
+    355
+   ],
+   "size": [
+    160,
+    60
+   ]
+  },
+  {
+   "id": "llm",
+   "type": "cloud",
+   "label": "大模型 DeepSeek",
+   "sublabel": "仅冷路径：综合问答·周整理",
+   "pos": [
+    850,
+    355
+   ],
+   "size": [
+    140,
+    60
+   ]
+  },
+  {
+   "id": "fts",
+   "type": "database",
+   "label": "全文检索索引",
+   "sublabel": "INDEX.db · SQLite 本地毫秒级",
+   "pos": [
+    60,
+    505
+   ],
+   "size": [
+    150,
+    60
+   ]
+  },
+  {
+   "id": "bankmd",
+   "type": "database",
+   "label": "记忆库 bank/（真相层）",
+   "sublabel": "用户画像·项目·经验教训",
+   "pos": [
+    345,
+    505
+   ],
+   "size": [
+    180,
+    60
+   ]
+  },
+  {
+   "id": "git",
+   "type": "messagebus",
+   "label": "git 多设备同步",
+   "sublabel": "提交前闸门 · 4台设备 拉取→推送",
+   "pos": [
+    860,
+    505
+   ],
+   "size": [
+    140,
+    60
+   ]
+  }
+ ],
+ "boundaries": [
+  {
+   "kind": "region",
+   "label": "热路径 · 零大模型 · 零联网",
+   "wraps": [
+    "cli",
+    "daemon",
+    "infer",
+    "sec",
+    "fts"
+   ]
+  },
+  {
+   "kind": "region",
+   "label": "冷路径 · 唯一大模型出口",
+   "wraps": [
+    "consol",
+    "llm"
+   ]
+  },
+  {
+   "kind": "security-group",
+   "label": "三层安全网",
+   "wraps": [
+    "sec"
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "id": "invoke",
+   "from": "clients",
+   "to": "cli",
+   "label": "「查：/记：」触发",
+   "variant": "emphasis"
+  },
+  {
+   "id": "fastwrite",
+   "from": "clients",
+   "to": "daemon",
+   "label": "自动捕获 · 约百毫秒落库",
+   "fromSide": "bottom",
+   "toSide": "top",
+   "via": [
+    [
+     435,
+     165
+    ]
+   ]
+  },
+  {
+   "id": "read-preload",
+   "from": "clients",
+   "to": "preload",
+   "label": "会话启动时读取",
+   "fromSide": "right",
+   "toSide": "top",
+   "via": [
+    [
+     575,
+     95
+    ],
+    [
+     575,
+     155
+    ],
+    [
+     690,
+     155
+    ]
+   ]
+  },
+  {
+   "id": "gen-preload",
+   "from": "daemon",
+   "to": "preload",
+   "label": "生成 ≤200行",
+   "fromSide": "right",
+   "toSide": "left"
+  },
+  {
+   "id": "guard",
+   "from": "cli",
+   "to": "sec",
+   "label": "写入前拦截",
+   "variant": "security",
+   "fromSide": "right",
+   "toSide": "top",
+   "via": [
+    [
+     265,
+     235
+    ],
+    [
+     265,
+     315
+    ],
+    [
+     290,
+     315
+    ]
+   ]
+  },
+  {
+   "id": "inference",
+   "from": "daemon",
+   "to": "infer",
+   "label": "自动推断类型标签",
+   "fromSide": "left",
+   "toSide": "top",
+   "via": [
+    [
+     320,
+     235
+    ],
+    [
+     320,
+     285
+    ],
+    [
+     525,
+     285
+    ]
+   ],
+   "labelAt": [
+    365,
+    285
+   ]
+  },
+  {
+   "id": "search",
+   "from": "cli",
+   "to": "fts",
+   "label": "本地搜索 · 零消耗",
+   "fromSide": "left",
+   "toSide": "left",
+   "via": [
+    [
+     15,
+     235
+    ],
+    [
+     15,
+     535
+    ]
+   ],
+   "labelAt": [
+    40,
+    455
+   ]
+  },
+  {
+   "id": "write-md",
+   "from": "cli",
+   "to": "bankmd",
+   "label": "写入记忆正文",
+   "variant": "emphasis",
+   "fromSide": "bottom",
+   "toSide": "left",
+   "via": [
+    [
+     145,
+     480
+    ],
+    [
+     310,
+     480
+    ],
+    [
+     310,
+     535
+    ]
+   ]
+  },
+  {
+   "id": "daemon-write",
+   "from": "daemon",
+   "to": "bankmd",
+   "label": "快写落盘",
+   "labelAt": [
+    380,
+    340
+   ],
+   "fromSide": "bottom",
+   "toSide": "top",
+   "via": [
+    [
+     435,
+     385
+    ]
+   ]
+  },
+  {
+   "id": "synthesize",
+   "from": "cli",
+   "to": "llm",
+   "label": "综合问答 · 结论必带出处",
+   "variant": "dashed",
+   "fromSide": "top",
+   "toSide": "top",
+   "via": [
+    [
+     145,
+     45
+    ],
+    [
+     920,
+     45
+    ]
+   ]
+  },
+  {
+   "id": "weekly",
+   "from": "consol",
+   "to": "llm",
+   "label": "近7天窗口",
+   "variant": "dashed"
+  },
+  {
+   "id": "maintain",
+   "from": "consol",
+   "to": "bankmd",
+   "label": "去重·归档·生成技能草稿",
+   "fromSide": "bottom",
+   "toSide": "right",
+   "via": [
+    [
+     700,
+     535
+    ]
+   ]
+  },
+  {
+   "id": "push",
+   "from": "bankmd",
+   "to": "git",
+   "label": "提交并推送 · 4台设备",
+   "variant": "emphasis",
+   "fromSide": "bottom",
+   "toSide": "left",
+   "via": [
+    [
+     435,
+     595
+    ],
+    [
+     820,
+     595
+    ],
+    [
+     820,
+     535
+    ]
+   ]
+  }
+ ]
 }
