@@ -57,10 +57,10 @@ ok = False
 try:
     data = json.loads(out2)
     gen = next(d for d in data if "通用经验" in d["title"])
-    ok = "scope:global" in gen["tags"] and f"device:lenovo" in gen["tags"]
+    ok = "scope:global" in gen["tags"] and f"device:workstation" in gen["tags"]
 except Exception:
     pass
-check("① 通用经验 → scope:global + device:lenovo", ok, out2[:300])
+check("① 通用经验 → scope:global + device:workstation", ok, out2[:300])
 
 rc, out, err = run("add", "--title", f"{MARK}环境经验本机Anaconda", "--category", "knowledge",
                    "--body", f"{MARK} 本机 F:\\Anaconda3 缺 JPEG 编码器。", "--auto")
@@ -80,7 +80,7 @@ fp = os.path.join(ROOT, "bank", "knowledge", "20260101-000000-000-" + MARK + "�
 with open(fp, "w", encoding="utf-8") as f:
     f.write("""---
 title: """ + MARK + """他机python坑
-tags: [scope:device, device:zhengzefeng]
+tags: [scope:device, device:thinkbook]
 category: knowledge
 confidence: medium
 verified_at: 2026-09-30
@@ -94,12 +94,12 @@ zhengzefeng 那台机的 python 环境在 C:\\Users\\32726 有 io 污染问题�
 """)
 rc, out, err = run("consolidate", "--mode", "auto")  # 索引刷新
 rc, out, err = run("search", MARK, "--limit", "20")
-check("② 他机条目标注 🖥️", "🖥️他机经验(zhengzengfeng".replace("zhengzengfeng","zhengzefeng") in out or "🖥️他机经验(zhengzefeng)" in out, out[:600])
+check("② 他机条目标注 🖥️", "🖥️他机经验(thinkbook)" in out, out[:600])
 
 rc, out, err = run("search", MARK, "--limit", "20", "--device", "local")
 check("② --device local 隐藏他机专属", "他机python坑" not in out, out[:400])
-rc, out, err = run("search", MARK, "--limit", "20", "--device", "zhengzefeng")
-check("② --device zhengzefeng 只看他机", "他机python坑" in out and "通用经验" in out, out[:400])
+rc, out, err = run("search", MARK, "--limit", "20", "--device", "thinkbook")
+check("② --device thinkbook 只看他机", "他机python坑" in out and "通用经验" in out, out[:400])
 
 # ── ③ supersedes 不引导收编他机专属条目 ──
 rc, out, err = run("add", "--title", f"{MARK}他机python坑最终结论", "--category", "knowledge",

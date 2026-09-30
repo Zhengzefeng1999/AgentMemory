@@ -388,7 +388,7 @@ v2.2 引入 `device:`（来源设备）+ `scope:`（适用范围）双标签，*
 // config.json（每台设备各自配置）
 {
   "device": {
-    "name": "lenovo"   // 本机主力机；其他设备：thinkbook / workstation / home
+    "name": "workstation"   // 本工作站；其他设备：thinkbook / home
   }
 }
 ```
@@ -397,9 +397,8 @@ v2.2 引入 `device:`（来源设备）+ `scope:`（适用范围）双标签，*
 
 | 设备名 | 硬件 | 说明 |
 |---|---|---|
-| `lenovo` | 主力工作机 | C:\Users\Lenovo（已配置） |
-| `thinkbook` | Lenovo ThinkBook 16+ 笔记本 | 待在该机配置 |
-| `workstation` | Ultra 9 285K 工作站 | 待在该机配置（注意：历史条目中 zhengzefeng/32726 主机名若属此机，可用 `memory_tool update <path> ...` 或编辑 frontmatter 将 `device:zhengzengfeng` 统一改名） |
+| `workstation` | Ultra 9 285K 工作站（主力机，本机） | hostname=ADMINISTRATOR，C:\Users\Lenovo | ✅ 已配置 |
+| `thinkbook` | Lenovo ThinkBook 16+ 笔记本 | hostname=zhengzefeng，C:\Users\32726 | 待配置（存量 device:zhengzefeng 已改名 thinkbook） |
 | `home` | i5-10400 家用台式机 | 待在该机配置 |
 
 生效行为：
