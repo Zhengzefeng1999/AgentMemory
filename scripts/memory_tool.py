@@ -295,12 +295,12 @@ def title_containment(new, old):
 
 def _topic_peers(title, conn, threshold=0.3):
     """宽松同主题检索（containment）。返回同主题 active 条目，供演进引导。"""
-    rows = conn.execute("SELECT path, title, status FROM entries WHERE status='active'").fetchall()
+    rows = conn.execute("SELECT path, title, status, tags FROM entries WHERE status='active'").fetchall()
     peers = []
-    for path, t, status in rows:
+    for path, t, status, tags in rows:
         c = title_containment(title, t)
         if c >= threshold:
-            peers.append({"path": path, "title": t, "status": status, "overlap": round(c, 2)})
+            peers.append({"path": path, "title": t, "status": status, "tags": tags, "overlap": round(c, 2)})
     peers.sort(key=lambda x: -x["overlap"])
     return peers[:3]
 
@@ -318,13 +318,13 @@ def find_local_conflicts(title, body, conn, threshold=0.6):
     if len(ntitle) < 4:
         return []
     rows = conn.execute(
-        "SELECT path, title, type, status FROM entries WHERE status IN ('active','invalidated')"
+        "SELECT path, title, type, status, tags FROM entries WHERE status IN ('active','invalidated')"
     ).fetchall()
     cands = []
-    for path, t, typ, status in rows:
+    for path, t, typ, status, tags in rows:
         sim = title_similarity(title, t)
         if sim >= threshold:
-            cands.append({"path": path, "title": t, "type": typ, "status": status, "overlap": round(sim, 2)})
+            cands.append({"path": path, "title": t, "type": typ, "status": status, "tags": tags, "overlap": round(sim, 2)})
     cands.sort(key=lambda x: -x["overlap"])
     return cands[:3]
 
@@ -342,22 +342,46 @@ def find_body_dup(body, conn):
     ).fetchall()
     return [{"path": r[0], "title": r[1], "status": r[2]} for r in rows]
 
+# ---- v2.2 设备标签解析（检索端标注 / PRELOAD 过滤 / supersedes 防跨设备共用） ----
+
+def _tags_of(tags_str):
+    """索引 tags 字符串（逗号分隔）→ set。"""
+    return {t.strip() for t in (tags_str or "").split(",") if t.strip()}
+
+def _device_view(tags_str):
+    """→ (scope, device)：从 tags 提取 scope:device/scope:global 与 device:<name>。"""
+    ts = _tags_of(tags_str)
+    scope = next((t for t in ts if t.startswith("scope:")), "")
+    dev = next((t for t in ts if t.startswith("device:")), "")
+    return scope, (dev.split(":", 1)[1] if dev else "")
+
+def _is_foreign_device(tags_str, local=None):
+    """他机专属：scope:device 且来源设备≠本机（含无 device 标签的存量条目）。"""
+    local = local or get_device_name()
+    scope, dev = _device_view(tags_str)
+    return scope == "scope:device" and dev != local
+
 # ---- v2.2 更正流引导：把 --supersedes 从"靠素养"变"靠提示" ----
 
 _SUPERSEDE_HINT_RE = re.compile(r"最终|定稿|更正|纠正|推翻|替代|收编|结论|批复|修订|更新版|新版|v\d+")
 
-def suggest_supersedes(title, conflicts):
+def suggest_supersedes(title, conflicts, local_device=None):
     """标题含演进/更正语义触发词 且 同主题已有 active 条目 → 返回引导文本；否则 None。
-    背景：拦河坝2案例 29 分钟内连写 4 版"最终"结论互不收编，检索时并存矛盾数值。"""
+    背景：拦河坝2案例 29 分钟内连写 4 版"最终"结论互不收编，检索时并存矛盾数值。
+    v2.2 设备防线：他机专属条目不参与收编建议——防跨设备伪冲突互相覆写
+    （A 机验证发现 B 机经验"不对"→ 把 B 机正确经验改成 A 机事实）。"""
     if not conflicts or not _SUPERSEDE_HINT_RE.search(title or ""):
         return None
-    actives = [c for c in conflicts if c.get("status") == "active"]
+    local = local_device or get_device_name()
+    actives = [c for c in conflicts
+               if c.get("status") == "active" and not _is_foreign_device(c.get("tags", ""), local)]
     if not actives:
         return None
     tops = "、".join(f"{c['title'][:24]}" for c in actives[:2])
     return (f"💡 标题含演进/更正语义，同主题已有 active 条目：{tops}"
             f"{' 等' if len(actives) > 2 else ''}。若本条为替代/推翻，建议加 "
-            f"--supersedes \"{actives[0]['path']}\" 一步收编旧条，避免新旧矛盾并存。")
+            f"--supersedes \"{actives[0]['path']}\" 一步收编旧条，避免新旧矛盾并存。"
+            + ("（已排除他机专属条目）" if len(actives) < len([c for c in conflicts if c.get('status')=='active']) else ""))
 
 # ---- v2.2 同主题多版本检测（检索端可见性 + health 统计共用） ----
 
@@ -392,6 +416,29 @@ _AGENT_ENV = [
     ("agent:codex",       lambda e: "CODEX_SANDBOX" in e or any(k.startswith("CODEX_") for k in e)),
 ]
 
+# ---- v2.2 设备维度（多设备共享库：设备经验互不适用/互相污染问题） ----
+
+def get_device_name():
+    """设备名：config.json device.name 优先（hostname 常为 ADMINISTRATOR 这类无意义默认值，
+    必须在各设备显式配置）；缺省退化 COMPUTERNAME 小写。"""
+    try:
+        return str(load_config().get("device", {}).get("name", "")).strip().lower()
+    except Exception:
+        pass
+    return os.environ.get("COMPUTERNAME", "unknown").strip().lower()
+
+# 环境强相关特征（写入时自动判 scope；零 LLM）
+_ENV_SCOPE_RE = re.compile(
+    "本机|[A-Za-z]:[\\\\/]|C[:/\\\\]+Users|zhengzefeng|32726|主机名|hostname|"
+    "ThinkBook|Thinkbook|285[Kk]|i5-?10400|工作机|Anaconda3|工号|电脑配置|这台|那台"
+)
+
+def infer_scope(title, body):
+    """适用范围推断：命中环境特征 → scope:device，否则 scope:global。
+    例：'F:\\Anaconda3 的坑'→device；'水文规范公式'→global。"""
+    text = f"{title or ''}\n{body or ''}"
+    return "scope:device" if _ENV_SCOPE_RE.search(text) else "scope:global"
+
 def _git_root(start=None, max_up=12):
     """向上找 .git（目录或文件）返回仓库根；没有则 None。仅 stat 调用，µs 级。"""
     d = os.path.abspath(start or os.getcwd())
@@ -405,7 +452,7 @@ def _git_root(start=None, max_up=12):
     return None
 
 def _context_tags(cwd=None):
-    """capture/add 自动附加的溯源标签：project:<git根目录名> + agent:<来源>。
+    """capture/add 自动附加的溯源标签：project:<git根目录名> + agent:<来源> + device:<设备名>。
     无 git 则不打 project 标签（避免把 repositories 这类杂目录名当项目）。"""
     tags = []
     root = _git_root(cwd)
@@ -421,6 +468,7 @@ def _context_tags(cwd=None):
                 break
         except Exception:
             pass
+    tags.append(f"device:{get_device_name()}")
     return tags
 
 def _merge_context_tags(tags):
@@ -536,7 +584,10 @@ def cmd_add(args):
                 pass
     category = args.category or infer_category(title, body)
     tags = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else infer_tags(title, body)
-    tags = _merge_context_tags(tags)  # v2.1 溯源标签（project/agent）
+    tags = _merge_context_tags(tags)  # v2.1 溯源标签（project/agent）+ v2.2 device
+    scope = getattr(args, "scope", None) or infer_scope(title, body)  # v2.2 适用范围
+    if scope not in tags:
+        tags.append(scope)
 
     # 安全网①：写前拦截（Q7）
     ok, mark_msg = pre_write_security_check(title, body)
@@ -590,7 +641,9 @@ def cmd_add(args):
                 print("已取消写入")
                 return 2
         else:
-            print(f"ℹ️ 发现 {len(conflicts)} 条可能重复条目（如: {conflicts[0]['path']}），语义冲突由 consolidate 复核")
+            n_foreign = sum(1 for c in conflicts if _is_foreign_device(c.get("tags", "")))
+            foreign_note = f"（含 {n_foreign} 条他机专属，不适用本地 --supersedes/archive）" if n_foreign else ""
+            print(f"ℹ️ 发现 {len(conflicts)} 条可能重复条目（如: {conflicts[0]['path']}），语义冲突由 consolidate 复核{foreign_note}")
     hint = suggest_supersedes(title, conflicts or evo_peers)
     if hint:
         print(hint)
@@ -614,7 +667,10 @@ def cmd_capture(args):
         mtype = args.type
     category = args.category or infer_category(title, body)
     tags = args.tags.split(",") if args.tags else infer_tags(title, body)
-    tags = _merge_context_tags(tags)  # v2.1 溯源标签（project/agent）
+    tags = _merge_context_tags(tags)  # v2.1 溯源标签（project/agent）+ v2.2 device
+    scope = getattr(args, "scope", None) or infer_scope(title, body)  # v2.2 适用范围
+    if scope not in tags:
+        tags.append(scope)
 
     ok, mark_msg = pre_write_security_check(title, body)
     if not ok:
@@ -633,7 +689,9 @@ def cmd_capture(args):
         print(f"⚠️ capture 正文指纹与已有条目完全相同：{body_dups[0]['title']} ({body_dups[0]['path']})——疑似重复导入，请复核")
     if conflicts:
         meta["conflicts"] = [c["path"] for c in conflicts]
-        print(f"ℹ️ capture 发现 {len(conflicts)} 条可能重复（已记入 conflicts 字段，consolidate 复核）")
+        n_foreign = sum(1 for c in conflicts if _is_foreign_device(c.get("tags", "")))
+        foreign_note = f"（含 {n_foreign} 条他机专属，不适用本地 --supersedes/archive）" if n_foreign else ""
+        print(f"ℹ️ capture 发现 {len(conflicts)} 条可能重复（已记入 conflicts 字段，consolidate 复核）{foreign_note}")
     hint = suggest_supersedes(title, conflicts or evo_peers)
     if hint:
         print(hint)
@@ -693,6 +751,18 @@ def cmd_search(args):
     else:
         scored = [(r[6] * 0.1, r) for r in rows]
     scored.sort(key=lambda x: -x[0])
+    # v2.2 设备过滤：--device local 只看本机专属+global+未知来源；--device <name> 看指定设备
+    local_dev = get_device_name()
+    dev_filter = getattr(args, "device", None) or "all"
+    if dev_filter != "all":
+        want = local_dev if dev_filter == "local" else dev_filter
+        kept = []
+        for s, r in scored:
+            scope, dv = _device_view(r[3])  # r[3]=tags
+            if scope == "scope:device" and dv not in ("", want):
+                continue  # 他机专属，过滤
+            kept.append((s, r))
+        scored = kept
     out = []
     for score, r in scored[:limit]:
         out.append({
@@ -742,7 +812,14 @@ def cmd_search(args):
         ver_flag = ""
         if ci:
             ver_flag = " ✅最新" if ci["is_latest"] else f" 🕘旧版(最新: {ci['latest_title'][:24]})"
-        print(f"[{it['score']:>5}] {it['category']}/{it['title']} {flag}{secret_flag}{ver_flag}")
+        # v2.2 设备标注：他机专属经验提示验证；来源不明的环境条目提示
+        dev_flag = ""
+        scope, dv = _device_view(it.get("tags", ""))
+        if scope == "scope:device" and dv and dv != local_dev:
+            dev_flag = f" 🖥️他机经验({dv})，请验证适用性"
+        elif scope == "scope:device" and not dv:
+            dev_flag = " 🖥️?来源不明(环境相关)"
+        print(f"[{it['score']:>5}] {it['category']}/{it['title']} {flag}{secret_flag}{ver_flag}{dev_flag}")
         print(f"       tags={it['tags']} hits={it['hits']} 验证={it['verified_at']} type={it['type']}")
         if it.get("secret"):
             print(f"       (敏感条目，正文已隐藏；get 需 --force)")
@@ -957,9 +1034,11 @@ def cmd_health(args):
     low_conf = conn.execute("SELECT COUNT(*) FROM entries WHERE confidence='low' AND status='active'").fetchone()[0]
     pinned = conn.execute("SELECT COUNT(*) FROM entries WHERE pinned=1").fetchone()[0]
     secret = conn.execute("SELECT COUNT(*) FROM entries WHERE secret=1").fetchone()[0]
-    # v2.2 一致性治理指标：同主题多版本组 + 待复核 conflicts
-    active_rows = conn.execute("SELECT path, title, verified_at FROM entries WHERE status='active'").fetchall()
+    # v2.2 一致性治理指标：同主题多版本组 + 待复核 conflicts + 他机环境条目
+    active_rows = conn.execute("SELECT path, title, verified_at, tags FROM entries WHERE status='active'").fetchall()
     multi_groups = cluster_by_title([{"path": r[0], "title": r[1], "verified_at": r[2]} for r in active_rows], threshold=0.75)
+    local_dev = get_device_name()
+    foreign = sum(1 for r in active_rows if _is_foreign_device(r[3], local_dev))
     conflicts_pending = 0
     for fp in all_entry_files():
         try:
@@ -978,8 +1057,10 @@ def cmd_health(args):
     print(f"  钉住常驻     : {pinned} | 敏感标记 {secret}")
     print(f"  累计命中次数 : {total_hits}")
     print(f"  低置信度活跃 : {low_conf}")
+    print(f"  当前设备     : {local_dev}")
     print(f"  同主题多版本 : {len(multi_groups)} 组（建议 archive 旧版或 --supersedes 收编）")
     print(f"  待复核冲突   : {conflicts_pending} 条（frontmatter conflicts 非空，跑 consolidate auto/llm 复核）")
+    print(f"  他机环境条目 : {foreign} 条（scope:device 且来源≠本机；检索标 🖥，PRELOAD 已过滤）")
     print("  分类分布:")
     for c, n in by_cat:
         print(f"    {c:<12} {n}")
@@ -1004,6 +1085,7 @@ def main():
     pa.add_argument("--secret", action="store_true", help="标记为敏感条目")
     pa.add_argument("--auto", action="store_true", help="自动模式：永不交互（自动捕获用）")
     pa.add_argument("--supersedes", help="v2.1 更正流：被本条替代的旧条目 id/path（写入后自动标 invalidated+superseded_by）")
+    pa.add_argument("--scope", choices=["scope:device", "scope:global"], help="v2.2 适用范围（缺省按正文环境特征自动推断）")
     pa.set_defaults(func=cmd_add)
 
     pc = sub.add_parser("capture", help="自动捕获（agent 会话中调用，--auto 语义）")
@@ -1018,6 +1100,7 @@ def main():
     pc.add_argument("--secret", action="store_true")
     pc.add_argument("--auto", action="store_true", help="自动模式：永不交互（默认即此语义）")
     pc.add_argument("--supersedes", help="v2.1 更正流：被本条替代的旧条目 id/path（写入后自动标 invalidated+superseded_by）")
+    pc.add_argument("--scope", choices=["scope:device", "scope:global"], help="v2.2 适用范围（缺省按正文环境特征自动推断）")
     pc.set_defaults(func=cmd_capture)
 
     ps = sub.add_parser("search", help="检索记忆")
@@ -1027,6 +1110,7 @@ def main():
     ps.add_argument("--limit", type=int, default=20)
     ps.add_argument("--json", action="store_true")
     ps.add_argument("--synthesize", action="store_true", help="LLM 综合回答（冷路径，强制来源标注）")
+    ps.add_argument("--device", default="all", help="v2.2 设备过滤：local=本机专属+global+未知来源；all=全部（默认）；或指定设备名")
     ps.set_defaults(func=cmd_search)
 
     pcon = sub.add_parser("consolidate", help="周整理（auto=零LLM规则整理 / llm=批量提炼；独立进程+超时防挂起）")

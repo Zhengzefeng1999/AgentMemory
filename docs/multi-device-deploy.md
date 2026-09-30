@@ -378,3 +378,33 @@ python D:/AgentMemory/scripts/sync_memory.py
 ---
 
 *文档结束。遇到任何问题，先在本文「常见问题」中查找；仍未解决再联系配置方。*
+
+## v2.2 设备维度配置（必读）
+
+多设备共享库存在"设备经验互不适用/互相污染"问题（实测 52% 条目携带环境特征）。
+v2.2 引入 `device:`（来源设备）+ `scope:`（适用范围）双标签，**每台设备必须配置**：
+
+```json
+// config.json（每台设备各自配置）
+{
+  "device": {
+    "name": "lenovo"   // 本机主力机；其他设备：thinkbook / workstation / home
+  }
+}
+```
+
+当前设备清单（2026-09-30）：
+
+| 设备名 | 硬件 | 说明 |
+|---|---|---|
+| `lenovo` | 主力工作机 | C:\Users\Lenovo（已配置） |
+| `thinkbook` | Lenovo ThinkBook 16+ 笔记本 | 待在该机配置 |
+| `workstation` | Ultra 9 285K 工作站 | 待在该机配置（注意：历史条目中 zhengzefeng/32726 主机名若属此机，可用 `memory_tool update <path> ...` 或编辑 frontmatter 将 `device:zhengzengfeng` 统一改名） |
+| `home` | i5-10400 家用台式机 | 待在该机配置 |
+
+生效行为：
+- 写入：自动附 `device:<name>`；正文含盘符/本机/主机名等特征 → `scope:device`，否则 `scope:global`
+- 检索：他机专属条目标 `🖥️他机经验(xxx)`，`--device local` 可过滤
+- PRELOAD：他机专属条目不注入会话预热
+- supersedes 引导：不指向他机专属条目（防跨设备伪冲突）
+- 存量回填：`python scripts/backfill_device_tags.py`（幂等）

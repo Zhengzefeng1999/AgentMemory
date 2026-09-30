@@ -37,6 +37,7 @@
 | **health 治理指标** | 新增「同主题多版本 N 组 / 待复核冲突 M 条」，脏数据率可见 |
 | **consolidate 三路查重** | 完全同名 + 近同名（2-gram≥0.9）+ conflicts 字段非空；auto 模式也写 CONFLICTS.md（冷路径闭环） |
 | **每周自动维护** | daemon 内置 maintenance 线程：每 7 天自动 consolidate auto，发现重复经飞书桥提醒 |
+| **设备维度（多设备共享库）** | 写入自动打 `device:<设备名>`（config.json device.name）+ `scope:device/global`（按正文环境特征推断）；检索标注 🖥️他机经验/来源不明 + `--device local|<name>` 过滤；PRELOAD 过滤他机专属；supersede 建议排除他机条目（防跨设备伪冲突互相覆写）；存量迁移 `scripts/backfill_device_tags.py` |
 
 ### v2.1 新增
 

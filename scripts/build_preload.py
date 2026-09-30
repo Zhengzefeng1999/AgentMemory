@@ -22,7 +22,7 @@ sys.path.insert(0, SCRIPTS)
 
 from memory_tool import (  # noqa: E402
     BANK_DIR, PRELOAD_PATH, _utf8, all_entry_files, entry_rel_path,
-    load_config, parse_frontmatter, rebuild_index,
+    get_device_name, load_config, parse_frontmatter, rebuild_index, _is_foreign_device,
 )
 
 MAX_LINES = 200
@@ -66,6 +66,10 @@ def build_preload(verbose=True):
         except ValueError:
             pass
         meta["_days_old"] = days_old
+        # v2.2 设备防线：他机专属环境条目不进 PRELOAD（常驻注入污染代价远大于检索命中）
+        tags_str = ",".join(meta.get("tags", []) or [])
+        if _is_foreign_device(tags_str):
+            continue
         entries.append({"rel": rel, "meta": meta, "summary": summary})
 
     pinned = [e for e in entries if e["meta"].get("pinned")]
