@@ -70,8 +70,11 @@ def find_duplicates(entries):
     """重复检测（v2.2 三路）：① title+tags 完全相同（原有）② frontmatter conflicts 非空
     ③ active 条目标题 2-gram 相似 ≥0.9（近同名）。返回 {组键: [条目]}。"""
     groups = {}
-    # ① 完全相同 title+tags
+    # ① 完全相同 title+tags（v2.2 修复：仅 active——已归档/已收编的历史对不再重复报告，
+    #    否则每次 consolidate 都把已处理过的对写进 CONFLICTS.md 噪音累积）
     for e in entries:
+        if e["meta"].get("status") != "active":
+            continue
         title = e["meta"].get("title", "").strip().lower()
         tags = ",".join(sorted(e["meta"].get("tags", []))).lower()
         key = ("exact", title, tags)
