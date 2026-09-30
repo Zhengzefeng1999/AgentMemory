@@ -33,3 +33,4 @@ launch-feishu.cjs
 daemon.out.log
 daemon.err.log
 .consolidate_state.json
+bank/
