@@ -32,3 +32,4 @@ launch-feishu.cjs
 # daemon 运行日志
 daemon.out.log
 daemon.err.log
+.consolidate_state.json
