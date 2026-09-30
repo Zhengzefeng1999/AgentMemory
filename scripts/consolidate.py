@@ -32,7 +32,7 @@ sys.path.insert(0, SCRIPTS)
 from memory_tool import (  # noqa: E402
     CATEGORY_DIRS, INDEX_DB, _utf8, all_entry_files, build_frontmatter,
     entry_rel_path, get_conn, init_schema, load_config, now_str, parse_frontmatter,
-    rebuild_index,
+    rebuild_index, title_similarity,
 )
 from security_rules import scan_text  # noqa: E402
 
@@ -67,14 +67,71 @@ def collect_entries():
 
 
 def find_duplicates(entries):
-    """按 title+tags 合并检测"""
+    """重复检测（v2.2 三路）：① title+tags 完全相同（原有）② frontmatter conflicts 非空
+    ③ active 条目标题 2-gram 相似 ≥0.9（近同名）。返回 {组键: [条目]}。"""
     groups = {}
+    # ① 完全相同 title+tags
     for e in entries:
         title = e["meta"].get("title", "").strip().lower()
         tags = ",".join(sorted(e["meta"].get("tags", []))).lower()
-        key = (title, tags)
+        key = ("exact", title, tags)
         groups.setdefault(key, []).append(e)
-    return {k: v for k, v in groups.items() if len(v) > 1}
+    exact = {k: v for k, v in groups.items() if len(v) > 1}
+    # ② conflicts 字段非空 → 逐条成组（等 consolidate/LLM 或人工复核）
+    flagged = {}
+    for e in entries:
+        cf = e["meta"].get("conflicts")
+        paths = [p for p in (cf if isinstance(cf, list) else [cf] if isinstance(cf, str) and cf else []) if p]
+        if paths and e["meta"].get("status") == "active":
+            flagged[("conflicts", e["rel"])] = [e]
+    # ③ 近同名（2-gram ≥0.9，仅 active，避免把已收编的 invalidated 再报一遍）
+    active = [e for e in entries if e["meta"].get("status") == "active"]
+    near = {}
+    used = set()
+    for i, a in enumerate(active):
+        if a["rel"] in used:
+            continue
+        grp = [a]
+        for b in active[i + 1:]:
+            if b["rel"] in used:
+                continue
+            if title_similarity(a["meta"].get("title", ""), b["meta"].get("title", "")) >= 0.9:
+                grp.append(b)
+                used.add(b["rel"])
+        if len(grp) > 1:
+            used.add(a["rel"])
+            near[("near", a["meta"].get("title", "")[:40])] = grp
+    out = {}
+    out.update(exact)
+    out.update(near)
+    out.update(flagged)
+    return out
+
+def append_conflicts_md(dups, verbose=True):
+    """v2.2：规则版重复清单也落 bank/CONFLICTS.md 决策单。
+    此前仅 llm 模式写入，冷路径停转时重复组无人知晓（2026-09-30 治理案例复盘）。"""
+    path = os.path.join(BANK_DIR, "CONFLICTS.md")
+    stamp = datetime.date.today().strftime("%Y%m%d")
+    lines = [f"\n## {stamp} 规则整理重复清单（auto，待决策）\n"]
+    n_groups = 0
+    for k, v in dups.items():
+        if k[0] == "conflicts":
+            lines.append(f"- **待复核 conflicts**：{v[0]['meta'].get('title', '')[:40]} ({v[0]['rel']})")
+            n_groups += 1
+        else:
+            titles = "、".join(e["meta"].get("title", "")[:24] for e in v)
+            lines.append(f"- **{'完全同名' if k[0] == 'exact' else '近同名'}重复 {len(v)} 条**：{titles}")
+            for e in v:
+                lines.append(f"  - {e['rel']}（验证={e['meta'].get('verified_at','')}）")
+            n_groups += 1
+    if n_groups == 0:
+        lines.append("- 未发现规则级重复（语义冲突仍需 llm 模式复核）")
+    lines.append("\n---\n")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    if verbose:
+        print(f"  重复清单已追加 → bank/CONFLICTS.md（{n_groups} 组）")
+    return n_groups
 
 
 def find_cold(entries, updated_days=STALE_UPDATED_DAYS, read_days=STALE_READ_DAYS):
@@ -210,13 +267,14 @@ def run_auto(verbose=True):
         archived_old += 1
 
     rebuild_index(verbose=False)
+    append_conflicts_md(dups, verbose=verbose)
 
     if verbose:
         print("===== consolidate 规则整理结果 (v2) =====")
         print(f"  总条目      : {len(entries)}")
         print(f"  疑似重复    : {sum(len(v) for v in dups.values())} 条 / {len(dups)} 组")
         for k, v in dups.items():
-            print(f"    [{k[0][:30]}] → {len(v)} 条重复")
+            print(f"    [{k[0]}:{k[1][:30]}] → {len(v)} 条重复")
         print(f"  双信号冷条目: {len(cold)}（衰减: 降级 {len(cold) - archived_decay} / 归档 {archived_decay}）")
         print(f"  v1 过期归档  : {archived_old} 条")
         print(f"  模式统计    : {len(pats)} 个标签")

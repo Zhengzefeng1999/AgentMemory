@@ -26,8 +26,11 @@ import argparse
 import datetime
 import json
 import os
+import re
 import sqlite3
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -244,6 +247,68 @@ def _daemon_synthesize(q, hits):
     except Exception as e:
         return f"synthesize 调用失败: {e}"
 
+# ---- v2.2 每周维护线程（P3：冷路径不再依赖人记得跑） ----
+
+MAINT_CHECK_INTERVAL = 3600      # 每小时检查一次到期
+MAINT_WEEKLY_SECONDS = 7 * 24 * 3600
+MAINT_STATE = os.path.join(ROOT, ".consolidate_state.json")
+
+def _maint_load_state():
+    try:
+        with open(MAINT_STATE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _maint_save_state(st):
+    try:
+        with open(MAINT_STATE, "w", encoding="utf-8") as f:
+            json.dump(st, f)
+    except Exception:
+        pass
+
+def run_weekly_consolidate():
+    """subprocess 跑 consolidate auto（有界 300s），返回 (ok, 摘要)。"""
+    import subprocess as sp
+    try:
+        r = sp.run([sys.executable, os.path.join(SCRIPTS, "memory_tool.py"), "consolidate", "--mode", "auto"],
+                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        out = (r.stdout or "") + (r.stderr or "")
+        m = re.search(r"疑似重复\s*: (\d+) 条 / (\d+) 组", out)
+        dups = int(m.group(1)) if m else -1
+        return r.returncode == 0, f"rc={r.returncode} dups={dups}\n{out.strip()[-400:]}"
+    except Exception as e:
+        return False, f"consolidate 执行异常: {e}"
+
+def maintenance_loop():
+    """每周自动 consolidate auto；发现重复组时经飞书桥推送（已配置时）。"""
+    time.sleep(30)  # 避开启动尖峰
+    while True:
+        try:
+            st = _maint_load_state()
+            last = float(st.get("last_run_ts", 0))
+            now = time.time()
+            if now - last >= MAINT_WEEKLY_SECONDS:
+                print("[maintenance] 周期到期，执行 consolidate auto …")
+                ok, summary = run_weekly_consolidate()
+                _maint_save_state({"last_run_ts": now, "last_ok": ok,
+                                   "last_run_at": datetime.datetime.now().isoformat(timespec="seconds")})
+                print(f"[maintenance] consolidate 完成 ok={ok}\n{summary}")
+                m = re.search(r"dups=(\d+)", summary)
+                if ok and m and int(m.group(1)) > 0:
+                    cfg = CONFIG.get("feishu", {})
+                    chat_id = cfg.get("chat_id")
+                    if cfg.get("app_id") and chat_id:
+                        try:
+                            feishu_send(chat_id,
+                                        f"[AgentMemory 周整理] 发现 {m.group(1)} 条疑似重复，详见 bank/CONFLICTS.md，"
+                                        f"建议跑 consolidate llm 复核或手动 --supersedes 收编。", cfg)
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[maintenance] 异常（忽略继续）: {e}")
+        time.sleep(MAINT_CHECK_INTERVAL)
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass  # 静默
@@ -326,6 +391,10 @@ def main():
             print("⚠️ --with-bridge 但 config.json 未配置 feishu.app_id/app_secret，桥未启用")
         else:
             print(f"飞书桥已启用（chat_id={cfg.get('chat_id','未配置')}）")
+
+    # v2.2：每周维护线程（consolidate auto + 重复时飞书提醒）
+    threading.Thread(target=maintenance_loop, daemon=True, name="am-maintenance").start()
+    print("每周维护线程已启动（consolidate auto，重复时经飞书桥提醒）")
 
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"AgentMemory daemon v2 运行于 http://127.0.0.1:{args.port}")

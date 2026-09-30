@@ -163,13 +163,15 @@ def init_schema(conn):
         confidence TEXT, verified_at TEXT, hits INTEGER DEFAULT 0,
         status TEXT DEFAULT 'active', source TEXT, updated_at TEXT, summary TEXT,
         secret INTEGER DEFAULT 0, type TEXT DEFAULT 'belief',
-        pinned INTEGER DEFAULT 0, last_accessed TEXT DEFAULT '', superseded_by TEXT DEFAULT '') """)
+        pinned INTEGER DEFAULT 0, last_accessed TEXT DEFAULT '', superseded_by TEXT DEFAULT '',
+        bodyhash TEXT DEFAULT '') """)
     # v2: 兼容旧库补列
     for col, ddl in [
         ("type", "TEXT DEFAULT 'belief'"),
         ("pinned", "INTEGER DEFAULT 0"),
         ("last_accessed", "TEXT DEFAULT ''"),
         ("superseded_by", "TEXT DEFAULT ''"),
+        ("bodyhash", "TEXT DEFAULT ''"),
     ]:
         try:
             conn.execute(f"ALTER TABLE entries ADD COLUMN {col} {ddl}")
@@ -190,14 +192,14 @@ def index_file(conn, fp, meta, body):
     tags = ",".join(meta.get("tags", []))
     secret = 1 if meta.get("secret") else 0
     cur = conn.execute(
-        "INSERT OR REPLACE INTO entries(uid, path, title, tags, category, confidence, verified_at, hits, status, source, updated_at, summary, secret, type, pinned, last_accessed, superseded_by) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO entries(uid, path, title, tags, category, confidence, verified_at, hits, status, source, updated_at, summary, secret, type, pinned, last_accessed, superseded_by, bodyhash) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (uid, rel, meta.get("title", ""), tags, meta.get("category", ""),
          meta.get("confidence", "medium"), meta.get("verified_at", ""),
          int(meta.get("hits", 0)), meta.get("status", "active"),
          meta.get("source", ""), meta.get("updated_at", now_str()), summary, secret,
          meta.get("type", "belief"), 1 if meta.get("pinned") else 0,
-         meta.get("last_accessed", ""), meta.get("superseded_by", "")))
+         meta.get("last_accessed", ""), meta.get("superseded_by", ""), _body_hash(body)))
     rowid = cur.lastrowid
     try:
         conn.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
@@ -252,13 +254,65 @@ def pre_write_security_check(title, body):
         return False, f"已拦截：{reason}。请移除凭证内容后重试。"
     return True, ("; ".join(marked) if marked else "")
 
-# ---- 冲突检测（热路径本地版，Q3） ----
+# ---- 冲突检测（热路径本地版，Q3；v2.2 升级） ----
 
 def _norm(s):
     return re.sub(r"[\s，。！？、,.;:：()（）\-—_\"'《》<>]+", "", str(s).lower())
 
+def _bigrams(s):
+    """2-gram 集合。中文短标题的区分度显著优于字符集合（v2.2）。"""
+    t = _norm(s)
+    if len(t) < 2:
+        return {t} if t else set()
+    return {t[i:i + 2] for i in range(len(t) - 1)}
+
+def title_similarity(a, b):
+    """标题相似度：2-gram Jaccard；完全同名（normalize 后）直接 1.0。
+    v2.2 修复：旧版把 `nt != ntitle`（完全同名）排除在冲突外，导致双轮批量导入的
+    同名重复全部漏网——同名恰是最强重复信号，写入场景无自身可比，不应排除。"""
+    na, nb = _norm(a), _norm(b)
+    if not na or not nb:
+        return 0.0
+    if na == nb:
+        return 1.0
+    ga, gb = _bigrams(a), _bigrams(b)
+    if not ga or not gb:
+        return 0.0
+    return len(ga & gb) / len(ga | gb)
+
+def title_containment(new, old):
+    """宽松同主题度：共同 2-gram 占新标题 2-gram 总数（containment）。
+    适用"同前缀不同后缀"的版本演进链——拦河坝2案例四版标题 Jaccard 仅 0.17~0.29，
+    但共同主题前缀占新标题比例高，containment 可命中。仅作演进引导/聚类辅助，
+    不单独作为重复判据（短标题易虚高）。"""
+    g_new = _bigrams(new)
+    if not g_new:
+        return 0.0
+    g_old = _bigrams(old)
+    if not g_old:
+        return 0.0
+    return len(g_new & g_old) / len(g_new)
+
+def _topic_peers(title, conn, threshold=0.3):
+    """宽松同主题检索（containment）。返回同主题 active 条目，供演进引导。"""
+    rows = conn.execute("SELECT path, title, status FROM entries WHERE status='active'").fetchall()
+    peers = []
+    for path, t, status in rows:
+        c = title_containment(title, t)
+        if c >= threshold:
+            peers.append({"path": path, "title": t, "status": status, "overlap": round(c, 2)})
+    peers.sort(key=lambda x: -x["overlap"])
+    return peers[:3]
+
+def find_topic_peers_if_evolution(title, conn):
+    """仅当标题含演进/更正触发词时才跑宽松同主题检索（v2.2）。
+    避免普通写入付出 O(n) 额外扫描。"""
+    if not _SUPERSEDE_HINT_RE.search(title or ""):
+        return []
+    return _topic_peers(title, conn)
+
 def find_local_conflicts(title, body, conn, threshold=0.6):
-    """本地相似度冲突检测：标题/正文关键词重叠。返回候选条目路径列表。
+    """本地相似度冲突检测：标题 2-gram Jaccard（v2.2）。返回候选条目列表。
     零 LLM、零网络（ADR-0005）。语义级检测留给 consolidate。"""
     ntitle = _norm(title)
     if len(ntitle) < 4:
@@ -268,15 +322,66 @@ def find_local_conflicts(title, body, conn, threshold=0.6):
     ).fetchall()
     cands = []
     for path, t, typ, status in rows:
-        nt = _norm(t)
-        if not nt:
-            continue
-        # 标题重叠率
-        overlap = len(set(ntitle) & set(nt)) / max(len(set(ntitle) | set(nt)), 1)
-        if overlap >= threshold and nt != ntitle:
-            cands.append({"path": path, "title": t, "type": typ, "status": status, "overlap": round(overlap, 2)})
+        sim = title_similarity(title, t)
+        if sim >= threshold:
+            cands.append({"path": path, "title": t, "type": typ, "status": status, "overlap": round(sim, 2)})
     cands.sort(key=lambda x: -x["overlap"])
     return cands[:3]
+
+# ---- v2.2 正文指纹（兜底批量导入跑两轮 / 完全重复写入） ----
+
+def _body_hash(body):
+    import hashlib
+    return hashlib.sha256(str(body).encode("utf-8")).hexdigest()[:16]
+
+def find_body_dup(body, conn):
+    """正文 sha256 指纹精确查重（active）。完全相同正文 = 最强重复信号。"""
+    h = _body_hash(body)
+    rows = conn.execute(
+        "SELECT path, title, status FROM entries WHERE bodyhash=? AND status='active'", (h,)
+    ).fetchall()
+    return [{"path": r[0], "title": r[1], "status": r[2]} for r in rows]
+
+# ---- v2.2 更正流引导：把 --supersedes 从"靠素养"变"靠提示" ----
+
+_SUPERSEDE_HINT_RE = re.compile(r"最终|定稿|更正|纠正|推翻|替代|收编|结论|批复|修订|更新版|新版|v\d+")
+
+def suggest_supersedes(title, conflicts):
+    """标题含演进/更正语义触发词 且 同主题已有 active 条目 → 返回引导文本；否则 None。
+    背景：拦河坝2案例 29 分钟内连写 4 版"最终"结论互不收编，检索时并存矛盾数值。"""
+    if not conflicts or not _SUPERSEDE_HINT_RE.search(title or ""):
+        return None
+    actives = [c for c in conflicts if c.get("status") == "active"]
+    if not actives:
+        return None
+    tops = "、".join(f"{c['title'][:24]}" for c in actives[:2])
+    return (f"💡 标题含演进/更正语义，同主题已有 active 条目：{tops}"
+            f"{' 等' if len(actives) > 2 else ''}。若本条为替代/推翻，建议加 "
+            f"--supersedes \"{actives[0]['path']}\" 一步收编旧条，避免新旧矛盾并存。")
+
+# ---- v2.2 同主题多版本检测（检索端可见性 + health 统计共用） ----
+
+def cluster_by_title(items, threshold=0.6, title_key="title", path_key="path"):
+    """按标题 2-gram 相似度对条目聚类（v2.2 P2）。
+    相似度 = max(Jaccard, containment)——后者覆盖"同前缀不同后缀"的版本演进链。
+    items: dict 列表（含 title/path/verified_at）；返回 [{items, latest}]，仅含 size>1 的组。"""
+    def sim(a, b):
+        return max(title_similarity(a, b), title_containment(a, b))
+    groups = []
+    for it in items:
+        placed = False
+        for g in groups:
+            if sim(it[title_key], g["items"][0][title_key]) >= threshold:
+                g["items"].append(it)
+                placed = True
+                break
+        if not placed:
+            groups.append({"items": [it]})
+    multi = [g for g in groups if len(g["items"]) > 1]
+    for g in multi:
+        g["items"].sort(key=lambda x: str(x.get("verified_at", "")))  # 旧→新
+        g["latest"] = g["items"][-1]
+    return multi
 
 # ---- 溯源标签（v2.1；纯本地：向上 stat 找 .git + 环境变量扫描，零子进程零网络，ADR-0005） ----
 
@@ -452,15 +557,31 @@ def cmd_add(args):
         print(f"错误：--supersedes 指向的条目不存在: {sup_ref}")
         return 1
 
-    # 热路径冲突检测（本地相似度）
+    # 热路径冲突检测（v2.2：2-gram + 同名命中 + 正文指纹 + 演进引导）
     conn = get_conn(); init_schema(conn)
+    body_dups = find_body_dup(body, conn)
     conflicts = find_local_conflicts(title, body, conn)
+    evo_peers = conflicts or find_topic_peers_if_evolution(title, conn)  # 宽松同主题（仅触发词标题）
     conn.close()
+    if body_dups:
+        dup = body_dups[0]
+        print(f"⚠️ 正文指纹与已有条目完全相同：{dup['title']} ({dup['path']})")
+        if not args.auto and sys.stdin.isatty():
+            try:
+                r = input("疑似重复写入，仍要写入? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                r = "n"
+            if r != "y":
+                print("已取消写入（可用 update 补充旧条，或 --supersedes 走更正流）")
+                return 2
     if conflicts:
         if not args.auto and sys.stdin.isatty():
             print("⚠️ 发现可能重复/冲突的已有条目:")
             for c in conflicts:
                 print(f"   {c['overlap']:.0%}  {c['path']}  [{c['type']}] {c['title']}")
+            hint = suggest_supersedes(title, conflicts)
+            if hint:
+                print(hint)
             try:
                 r = input("仍要写入? [y/N] ").strip().lower()
             except (EOFError, KeyboardInterrupt):
@@ -470,6 +591,9 @@ def cmd_add(args):
                 return 2
         else:
             print(f"ℹ️ 发现 {len(conflicts)} 条可能重复条目（如: {conflicts[0]['path']}），语义冲突由 consolidate 复核")
+    hint = suggest_supersedes(title, conflicts or evo_peers)
+    if hint:
+        print(hint)
 
     rel = _write_entry(meta, body)
     print(f"已添加: {rel}  type={meta['type']} category={meta['category']}" + (" 🔒secret" if secret else ""))
@@ -499,13 +623,20 @@ def cmd_capture(args):
     secret = args.secret or bool(mark_msg)
 
     meta = _build_meta(title, tags, category, args.confidence, args.source, secret, mtype, False)
-    # 热路径冲突检测：--auto 下仅提示不阻塞（ADR-0005）
+    # 热路径冲突检测：--auto 下仅提示不阻塞（ADR-0005）；v2.2 附正文指纹 + 演进引导
     conn = get_conn(); init_schema(conn)
+    body_dups = find_body_dup(body, conn)
     conflicts = find_local_conflicts(title, body, conn)
+    evo_peers = conflicts or find_topic_peers_if_evolution(title, conn)  # 宽松同主题（仅触发词标题）
     conn.close()
+    if body_dups:
+        print(f"⚠️ capture 正文指纹与已有条目完全相同：{body_dups[0]['title']} ({body_dups[0]['path']})——疑似重复导入，请复核")
     if conflicts:
         meta["conflicts"] = [c["path"] for c in conflicts]
         print(f"ℹ️ capture 发现 {len(conflicts)} 条可能重复（已记入 conflicts 字段，consolidate 复核）")
+    hint = suggest_supersedes(title, conflicts or evo_peers)
+    if hint:
+        print(hint)
 
     rel = _write_entry(meta, body)
     print(f"已捕获: {rel}  type={meta['type']} category={meta['category']}" + (" 🔒secret" if secret else ""))
@@ -579,16 +710,39 @@ def cmd_search(args):
             return 0
         return _synthesize(q, out)
 
+    # v2.2 P2：同主题多版本标注（版本演进歧义在读取端可见；阈值0.45覆盖"同前缀演进链"）
+    multi_groups = cluster_by_title(out, threshold=0.45)
+    cluster_info = {}   # path -> {size, is_latest, latest_path}
+    for g in multi_groups:
+        for it in g["items"]:
+            cluster_info[it["path"]] = {
+                "size": len(g["items"]),
+                "is_latest": it is g["latest"],
+                "latest_path": g["latest"]["path"],
+                "latest_title": g["latest"]["title"],
+            }
+
     if args.json:
+        for it in out:
+            it["cluster"] = cluster_info.get(it["path"])
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return 0
     if not out:
         print("(无匹配)")
         return 0
+    if multi_groups:
+        print(f"⚠️ 检出 {len(multi_groups)} 组同主题多版本并存（最新已标 ✅，旧版建议 archive 或 --supersedes 收编）：")
+        for g in multi_groups:
+            print(f"   • {g['latest']['title'][:36]} ← 共 {len(g['items'])} 版（{g['items'][0]['verified_at']} → {g['latest']['verified_at']}）")
+        print()
     for it in out:
         flag = {"high": "", "medium": "", "low": "⚠"}.get(it["confidence"], "")
         secret_flag = " 🔒secret" if it.get("secret") else ""
-        print(f"[{it['score']:>5}] {it['category']}/{it['title']} {flag}{secret_flag}")
+        ci = cluster_info.get(it["path"])
+        ver_flag = ""
+        if ci:
+            ver_flag = " ✅最新" if ci["is_latest"] else f" 🕘旧版(最新: {ci['latest_title'][:24]})"
+        print(f"[{it['score']:>5}] {it['category']}/{it['title']} {flag}{secret_flag}{ver_flag}")
         print(f"       tags={it['tags']} hits={it['hits']} 验证={it['verified_at']} type={it['type']}")
         if it.get("secret"):
             print(f"       (敏感条目，正文已隐藏；get 需 --force)")
@@ -803,6 +957,19 @@ def cmd_health(args):
     low_conf = conn.execute("SELECT COUNT(*) FROM entries WHERE confidence='low' AND status='active'").fetchone()[0]
     pinned = conn.execute("SELECT COUNT(*) FROM entries WHERE pinned=1").fetchone()[0]
     secret = conn.execute("SELECT COUNT(*) FROM entries WHERE secret=1").fetchone()[0]
+    # v2.2 一致性治理指标：同主题多版本组 + 待复核 conflicts
+    active_rows = conn.execute("SELECT path, title, verified_at FROM entries WHERE status='active'").fetchall()
+    multi_groups = cluster_by_title([{"path": r[0], "title": r[1], "verified_at": r[2]} for r in active_rows], threshold=0.75)
+    conflicts_pending = 0
+    for fp in all_entry_files():
+        try:
+            with open(fp, encoding="utf-8") as f:
+                meta, _ = parse_frontmatter(f.read())
+            cf = meta.get("conflicts")
+            if cf and meta.get("status") == "active" and (isinstance(cf, list) and len(cf) or isinstance(cf, str) and cf):
+                conflicts_pending += 1
+        except Exception:
+            pass
     conn.close()
     files = len(all_entry_files())
     print("===== AgentMemory 健康报告 (v2) =====")
@@ -811,6 +978,8 @@ def cmd_health(args):
     print(f"  钉住常驻     : {pinned} | 敏感标记 {secret}")
     print(f"  累计命中次数 : {total_hits}")
     print(f"  低置信度活跃 : {low_conf}")
+    print(f"  同主题多版本 : {len(multi_groups)} 组（建议 archive 旧版或 --supersedes 收编）")
+    print(f"  待复核冲突   : {conflicts_pending} 条（frontmatter conflicts 非空，跑 consolidate auto/llm 复核）")
     print("  分类分布:")
     for c, n in by_cat:
         print(f"    {c:<12} {n}")
