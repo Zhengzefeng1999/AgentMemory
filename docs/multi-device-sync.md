@@ -53,8 +53,14 @@ git push -u origin main
 python D:/AgentMemory/scripts/sync_memory.py pull
 
 # 完整同步：拉取 → 提交本地 → 推送（写记忆后）
-python D:/AgentMemory/scripts/sync_memory.py sync   # 或直接运行
+python D:/AgentMemory/scripts/sync_memory.py full   # 等效：不带参数直接运行
+
+# 查看各设备提交情况（不改动任何东西）
+python D:/AgentMemory/scripts/sync_memory.py status
 ```
+
+> 子命令只有 `full` / `pull` / `push` / `status` 四个（默认 `full`）。
+> 写 `sync` 会报 `invalid choice`——那是旧文档的错，已更正。
 
 ### 第 4 步：其他 3 台设备
 ```bash
