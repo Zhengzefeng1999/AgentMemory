@@ -12,6 +12,9 @@ AgentMemory 多设备安全同步脚本
   4. 每个提交信息包含设备名+时间, 便于回溯
   5. 每台设备在写记忆前先同步一次, 写完后立即同步一次
 
+工作区有未提交变更时, Git 会拒绝 pull --rebase (rc=128)。此时完整同步改为
+"先提交本地变更 → 再拉取 → 再推送", 既保住铁律 1 的语义(pull 先行), 也不丢本地记忆。
+
 用法:
   python scripts/sync_memory.py            # 拉取 + 提交本地 + 推送 (完整同步)
   python scripts/sync_memory.py pull       # 只拉取远端记忆 (写记忆前必做)
@@ -39,15 +42,20 @@ BANK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bank"
 
 
 def run_git(args, check=True, capture=True):
-    """执行 git 命令, 返回 (returncode, stdout)。"""
+    """执行 git 命令, 返回 (returncode, stdout+stderr 合并文本)。
+
+    合并 stderr: git 的失败详情几乎全在 stderr (pull 被拒 / 网络错误 / push 被拒),
+    只回读 stdout 会得到空详情并且把失败原因藏掉 (2026-10-15 修)。
+    """
     cmd = ["git", "-C", BANK_DIR] + args
     result = subprocess.run(
         cmd, capture_output=capture, text=True, encoding="utf-8", errors="replace"
     )
+    out = (result.stdout or "") + (result.stderr or "")
     if check and result.returncode != 0:
-        print(f"❌ git {' '.join(args)} 失败:\n{result.stderr or result.stdout}")
+        print(f"❌ git {' '.join(args)} 失败:\n{out.strip() or '(无输出)'}")
         sys.exit(1)
-    return result.returncode, (result.stdout or "")
+    return result.returncode, out
 
 
 def device_name():
@@ -55,28 +63,38 @@ def device_name():
     return socket.gethostname() or "device"
 
 
-def sync_pull():
-    print("① 拉取远端记忆 (pull --rebase)...")
+def sync_pull(label="①"):
+    """拉取远端。返回 "ok" / "dirty" / "fail"。
+
+    "dirty" = 工作区有未提交变更, Git 拒绝 pull --rebase (rc=128)。
+    这不是错误、也不丢数据, 由调用方决定是先提交再拉取(完整同步)还是提示用户。
+    """
+    print(f"{label} 拉取远端记忆 (pull --rebase)...")
     rc, out = run_git(["pull", "--rebase", "origin", "main"], check=False)
-    if rc != 0:
-        # 区分: 网络/认证失败 vs 真正的合并冲突
-        low = out.lower()
-        if "conflict" in low or "merge conflict" in low or "<<<<<<<" in out:
-            print("⚠️ 检测到合并冲突! 请人工解决后重试:")
-            print("   cd D:/AgentMemory/bank")
-            print("   git status          # 查看冲突文件")
-            print("   # 手动编辑冲突文件, 保留两边内容, 删除冲突标记")
-            print("   git add <文件> && git commit && git push")
-            sys.exit(2)
-        print(f"⚠️ 拉取失败(可能是网络/未配置远程/无提交)。详情:\n{out}")
-        print("   - 首次使用且远程为空: 可忽略, 继续执行推送")
-        print("   - 未配置远程: 先执行 git -C bank remote add origin <URL>")
-        return False
-    if out.strip():
-        print(f"   拉取结果: {out.strip()[:200]}")
-    else:
-        print("   已是最新。")
-    return True
+    low = out.lower()
+    if rc == 0:
+        if "already up to date" in low:
+            print("   已是最新。")
+        elif out.strip():
+            print(f"   拉取结果: {out.strip()[:200]}")
+        else:
+            print("   已是最新。")
+        return "ok"
+    # 良性情形: 本地有未提交变更(未暂存或已暂存), Git 拒绝 rebase
+    if "cannot pull with rebase" in low:
+        return "dirty"
+    # 真正的合并冲突
+    if "conflict" in low or "<<<<<<<" in out:
+        print("⚠️ 检测到合并冲突! 请人工解决后重试:")
+        print("   cd D:/AgentMemory/bank")
+        print("   git status          # 查看冲突文件")
+        print("   # 手动编辑冲突文件, 保留两边内容, 删除冲突标记")
+        print("   git add <文件> && git commit && git push")
+        sys.exit(2)
+    print(f"⚠️ 拉取失败(网络/认证/未配置远程?)。详情:\n{out.strip() or '(无输出)'}")
+    print("   - 首次使用且远程为空: 可忽略, 继续执行推送")
+    print("   - 未配置远程: 先执行 git -C bank remote add origin <URL>")
+    return "fail"
 
 
 def sync_commit(message=None):
@@ -143,10 +161,27 @@ def main():
         cmd_status()
         return
 
-    if args.cmd in ("full", "pull"):
-        sync_pull()
+    if args.cmd == "pull":
+        state = sync_pull()
+        if state == "dirty":
+            print("   本地有未提交变更, Git 拒绝 pull --rebase(不会丢数据)。")
+            print("   建议直接运行完整同步: python D:/AgentMemory/scripts/sync_memory.py")
+            print("   (会先提交本地变更, 再拉取合并, 最后推送)")
+        print(f"\n✓ 完成 [{device_name()}]")
+        return
+
     if args.cmd == "full":
-        sync_commit()
+        state = sync_pull()
+        committed = False
+        if state == "dirty":
+            print("   本地有未提交变更, Git 拒绝 pull --rebase。改为: 先提交本地变更, 再拉取。")
+            committed = sync_commit()
+            state = sync_pull(label="①′")
+            if state == "dirty":
+                print("❌ 提交后仍被拒绝, 请人工检查: git -C bank status")
+                sys.exit(1)
+        if not committed:
+            sync_commit()
         sync_push()
     elif args.cmd == "push":
         sync_commit()

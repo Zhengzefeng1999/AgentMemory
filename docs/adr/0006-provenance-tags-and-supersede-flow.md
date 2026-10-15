@@ -46,4 +46,11 @@ v2.1 引入三件事，全部遵守 ADR-0005 热路径红线（零 LLM、零网�
 - 正面：检索获得项目维度；更正从三条命令变一条，agent 可执行性大幅提高；周整理回到统一入口；实测热路径 0.25–0.36s（含 Python 启动），红线未破。
 - 代价：条目 tags 含机器生成标签，人工阅读时略多两个词；`find_local_conflicts` 会把 invalidated 条目仍算作冲突候选（同主题本就该关联，可接受）。
 - 回归保障：tests/test_v3_context.py 20 项断言（溯源标签 5 + 更正流端到端 9 + 性能红线 1 + consolidate 有界性 3 + 无残留清理 1），全套 48/48。
-- 遗留：sync_memory.py 在 pull --rebase 返回 "Already up to date" 时误报"拉取失败"（返回码判断过严），不影响功能，待修。
+- 遗留（2026-10-15 已修）：`sync_memory.py` 的 `pull` 在**工作区有未提交变更**时被 Git 拒绝
+  （`error: cannot pull with rebase: You have unstaged changes.`，rc=128）；脚本只回读 `stdout`
+  而 git 把该错误写到 `stderr`，于是误报为「拉取失败」且详情为空。
+  **原记因「Already up to date 时误报、返回码判断过严」不成立**：实测拉取成功时 rc=0，
+  "Already up to date" 根本不会触发该分支。
+  修复：① `run_git` 合并 stderr 进诊断输出；② 识别 `cannot pull with rebase` 为良性「dirty」状态；
+  ③ 完整同步遇 dirty 时改为「先提交本地变更 → 再拉取 → 再推送」（保住铁律 1 的 pull 先行语义，
+  不丢本地记忆，绝不用 autostash/force）；④ `pull` 子命令遇 dirty 给出引导而非报错。

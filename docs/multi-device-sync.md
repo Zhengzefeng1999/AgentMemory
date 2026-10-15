@@ -61,6 +61,9 @@ python D:/AgentMemory/scripts/sync_memory.py status
 
 > 子命令只有 `full` / `pull` / `push` / `status` 四个（默认 `full`）。
 > 写 `sync` 会报 `invalid choice`——那是旧文档的错，已更正。
+>
+> 工作区有未提交变更时，Git 会拒绝 `pull --rebase`；完整同步会自动改为
+> 「先提交本地变更 → 再拉取 → 再推送」，不会丢记忆（`pull` 子命令则给出引导）。
 
 ### 第 4 步：其他 3 台设备
 ```bash
