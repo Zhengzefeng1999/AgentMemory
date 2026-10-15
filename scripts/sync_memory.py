@@ -63,6 +63,21 @@ def device_name():
     return socket.gethostname() or "device"
 
 
+def pull_summary(out):
+    """从 pull 输出中取一行关键结果。
+
+    合并 stderr 后输出含 fetch 进度等多行噪声, 只挑最相关的一行展示。
+    """
+    lines = [l.strip() for l in out.splitlines() if l.strip()]
+    if not lines:
+        return ""
+    for key in ("up to date", "up-to-date", "fast-forward", "updating ", "successfully"):
+        for line in lines:
+            if key in line.lower():
+                return line[:200]
+    return lines[0][:200]
+
+
 def sync_pull(label="①"):
     """拉取远端。返回 "ok" / "dirty" / "fail"。
 
@@ -73,12 +88,8 @@ def sync_pull(label="①"):
     rc, out = run_git(["pull", "--rebase", "origin", "main"], check=False)
     low = out.lower()
     if rc == 0:
-        if "already up to date" in low:
-            print("   已是最新。")
-        elif out.strip():
-            print(f"   拉取结果: {out.strip()[:200]}")
-        else:
-            print("   已是最新。")
+        summary = pull_summary(out)
+        print(f"   拉取结果: {summary}" if summary else "   已是最新。")
         return "ok"
     # 良性情形: 本地有未提交变更(未暂存或已暂存), Git 拒绝 rebase
     if "cannot pull with rebase" in low:
