@@ -110,30 +110,38 @@ def find_duplicates(entries):
     out.update(flagged)
     return out
 
-def append_conflicts_md(dups, verbose=True):
-    """v2.2：规则版重复清单也落 bank/CONFLICTS.md 决策单。
-    此前仅 llm 模式写入，冷路径停转时重复组无人知晓（2026-09-30 治理案例复盘）。"""
+def write_conflicts_md(dups, verbose=True):
+    """生成 bank/CONFLICTS.md 当前待办快照（整篇重写，幂等）。
+
+    旧版每次运行追加一段带日期的内容 → 实测累积 27 段 / 1472 行，同一批待办重复 27 次；
+    且多设备各跑一次 consolidate 就改同一处，必然产生 git 冲突（2026-10-19 实测卡住同步）。
+    本文件是派生数据 → 改成每次重写 + 不入库（见 bank/.gitignore）。
+    """
     path = os.path.join(BANK_DIR, "CONFLICTS.md")
-    stamp = datetime.date.today().strftime("%Y%m%d")
-    lines = [f"\n## {stamp} 规则整理重复清单（auto，待决策）\n"]
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = [
+        "# 待办冲突清单（CONFLICTS）\n",
+        "\n> 由 `consolidate auto` 整篇重写（幂等）；派生数据，不入 git。\n",
+        f"> 最后生成：{now}\n",
+        "\n## 规则级重复 / 待复核项\n\n",
+    ]
     n_groups = 0
-    for k, v in dups.items():
+    for k, v in sorted(dups.items(), key=lambda kv: (str(kv[0][0]), str(kv[0]))):
         if k[0] == "conflicts":
-            lines.append(f"- **待复核 conflicts**：{v[0]['meta'].get('title', '')[:40]} ({v[0]['rel']})")
+            lines.append(f"- **待复核 conflicts**：{v[0]['meta'].get('title', '')[:40]} ({v[0]['rel']})\n")
             n_groups += 1
         else:
             titles = "、".join(e["meta"].get("title", "")[:24] for e in v)
-            lines.append(f"- **{'完全同名' if k[0] == 'exact' else '近同名'}重复 {len(v)} 条**：{titles}")
+            lines.append(f"- **{'完全同名' if k[0] == 'exact' else '近同名'}重复 {len(v)} 条**：{titles}\n")
             for e in v:
-                lines.append(f"  - {e['rel']}（验证={e['meta'].get('verified_at','')}）")
+                lines.append(f"  - {e['rel']}（验证={e['meta'].get('verified_at','')}）\n")
             n_groups += 1
     if n_groups == 0:
-        lines.append("- 未发现规则级重复（语义冲突仍需 llm 模式复核）")
-    lines.append("\n---\n")
-    with open(path, "a", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+        lines.append("- 未发现规则级重复（语义冲突仍需 llm 模式复核）\n")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("".join(lines))
     if verbose:
-        print(f"  重复清单已追加 → bank/CONFLICTS.md（{n_groups} 组）")
+        print(f"  待办清单已重写 → bank/CONFLICTS.md（{n_groups} 组，幂等）")
     return n_groups
 
 
@@ -270,7 +278,7 @@ def run_auto(verbose=True):
         archived_old += 1
 
     rebuild_index(verbose=False)
-    append_conflicts_md(dups, verbose=verbose)
+    write_conflicts_md(dups, verbose=verbose)
 
     if verbose:
         print("===== consolidate 规则整理结果 (v2) =====")

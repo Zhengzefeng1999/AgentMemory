@@ -81,7 +81,7 @@ AgentMemory\
     lessons\             ← 经验层（failures / corrections / patterns）
     candidates\          ← SKILL.md 草稿（consolidate 生成，人工审阅）
     CANDIDATES.md        ← 待升级为 skill 的模式
-    CONFLICTS.md         ← 冲突卡（LLM 语义冲突，待你决策）
+    CONFLICTS.md         ← 待办冲突清单（consolidate 整篇重写，派生数据不入 git）
     INDEX.db             ← SQLite 索引（gitignore，可重建）
   scripts\               ← 纯 Python 标准库工具
     memory_tool.py       ← add/capture/search/get/update/archive/list/health/consolidate
