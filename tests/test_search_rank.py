@@ -129,6 +129,22 @@ def main():
     check("无意义长句不会被当成强匹配", not r or r[0]["score"] < 55,
           f"top={r[0]['score'] if r else None}")
 
+    # ⑦ 适用边界字段（--applies）写入 frontmatter 并在检索结果中可见
+    run("capture", "--title", f"{MARK}带适用边界的经验", "--body", f"{MARK}仅在 GBK 控制台成立",
+        "--category", "knowledge", "--applies", "Windows GBK 控制台")
+    r = search("带适用边界的经验")
+    check("applies_to 出现在检索结果", bool(r) and r[0].get("applies_to") == "Windows GBK 控制台",
+          f"got={r[0].get('applies_to') if r else None}")
+    hits_before = sum(it["hits"] for it in search("断面 排频"))
+    # ⑧ 索引重建不能把访问反馈（hits）清零
+    import importlib.util as _iu
+    spec = _iu.spec_from_file_location("mt_rebuild", TOOL)
+    _mt = _iu.module_from_spec(spec)
+    spec.loader.exec_module(_mt)
+    _mt.rebuild_index(verbose=False)
+    hits_after = sum(it["hits"] for it in search("断面 排频"))
+    check("索引重建保留 hits", hits_after >= hits_before, f"{hits_before} → {hits_after}")
+
     n = cleanup()
     print(f"  清理测试条目 {n} 个，索引已重建")
     print(f"\n===== 结果: {PASS} 通过 / {FAIL} 失败 =====")

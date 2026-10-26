@@ -173,6 +173,7 @@ def init_schema(conn):
         ("last_accessed", "TEXT DEFAULT ''"),
         ("superseded_by", "TEXT DEFAULT ''"),
         ("bodyhash", "TEXT DEFAULT ''"),
+        ("applies_to", "TEXT DEFAULT ''"),
     ]:
         try:
             conn.execute(f"ALTER TABLE entries ADD COLUMN {col} {ddl}")
@@ -193,14 +194,15 @@ def index_file(conn, fp, meta, body):
     tags = ",".join(meta.get("tags", []))
     secret = 1 if meta.get("secret") else 0
     cur = conn.execute(
-        "INSERT OR REPLACE INTO entries(uid, path, title, tags, category, confidence, verified_at, hits, status, source, updated_at, summary, secret, type, pinned, last_accessed, superseded_by, bodyhash) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO entries(uid, path, title, tags, category, confidence, verified_at, hits, status, source, updated_at, summary, secret, type, pinned, last_accessed, superseded_by, bodyhash, applies_to) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (uid, rel, meta.get("title", ""), tags, meta.get("category", ""),
          meta.get("confidence", "medium"), meta.get("verified_at", ""),
          int(meta.get("hits", 0)), meta.get("status", "active"),
          meta.get("source", ""), meta.get("updated_at", now_str()), summary, secret,
          meta.get("type", "belief"), 1 if meta.get("pinned") else 0,
-         meta.get("last_accessed", ""), meta.get("superseded_by", ""), _body_hash(body)))
+         meta.get("last_accessed", ""), meta.get("superseded_by", ""), _body_hash(body),
+         meta.get("applies_to", "")))
     rowid = cur.lastrowid
     try:
         conn.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
@@ -221,6 +223,13 @@ def _make_summary(meta, body):
 def rebuild_index(verbose=True):
     conn = get_conn()
     init_schema(conn)
+    # 使用信号只存在索引里（不写 frontmatter，避免 600 个文件反复改动/冲突），
+    # 重建前按 uid 备份 hits/last_accessed，重建后回填——否则每次重建都把访问反馈清零。
+    try:
+        keep = {u: (h, la) for u, h, la in conn.execute(
+            "SELECT uid, hits, last_accessed FROM entries").fetchall()}
+    except sqlite3.OperationalError:
+        keep = {}
     conn.execute("DELETE FROM entries")
     try:
         # 旧版 unicode61 FTS 表不支持中文分词 → 重建为 trigram
@@ -234,6 +243,9 @@ def rebuild_index(verbose=True):
             with open(fp, encoding="utf-8") as f:
                 text = f.read()
             meta, body = parse_frontmatter(text)
+            uid = entry_rel_path(fp).replace("/", "__").replace(".md", "")
+            if uid in keep:
+                meta["hits"], meta["last_accessed"] = keep[uid]
             index_file(conn, fp, meta, body)
             n += 1
         except Exception as e:
@@ -515,8 +527,8 @@ def _apply_supersedes(old_ref, new_rel):
     conn.commit(); conn.close()
     return True, f"旧条目已失效并指向新条目: {entry_rel_path(fp)} → {new_rel}"
 
-def _build_meta(title, tags, category, confidence, source, secret, mtype, pinned):
-    return {
+def _build_meta(title, tags, category, confidence, source, secret, mtype, pinned, applies_to=""):
+    meta = {
         "title": title,
         "tags": tags,
         "category": category,
@@ -533,6 +545,9 @@ def _build_meta(title, tags, category, confidence, source, secret, mtype, pinned
         "last_accessed": "",
         "superseded_by": "",
     }
+    if applies_to:
+        meta["applies_to"] = applies_to    # 经验适用边界（不填则不写该字段，保持 frontmatter 精简）
+    return meta
 
 def _write_entry(meta, body):
     """落盘 + 索引。返回 (rel_path, conn)。"""
@@ -599,7 +614,8 @@ def cmd_add(args):
     if mark_msg and not args.secret:
         print(f"ℹ️ 检测到敏感内容({mark_msg})，已自动标记 secret（摘要隐藏/不发给LLM/get需--force）")
 
-    meta = _build_meta(title, tags, category, args.confidence, args.source, secret, mtype, False)
+    meta = _build_meta(title, tags, category, args.confidence, args.source, secret, mtype, False,
+                       getattr(args, "applies", "") or "")
     if args.secret and category == "knowledge":
         print("⚠️ 提醒：secret 条目不会出现在检索摘要，也不会发给 LLM 提炼")
 
@@ -679,7 +695,8 @@ def cmd_capture(args):
         return 1
     secret = args.secret or bool(mark_msg)
 
-    meta = _build_meta(title, tags, category, args.confidence, args.source, secret, mtype, False)
+    meta = _build_meta(title, tags, category, args.confidence, args.source, secret, mtype, False,
+                       getattr(args, "applies", "") or "")
     # 热路径冲突检测：--auto 下仅提示不阻塞（ADR-0005）；v2.2 附正文指纹 + 演进引导
     conn = get_conn(); init_schema(conn)
     body_dups = find_body_dup(body, conn)
@@ -905,32 +922,39 @@ def _rank_rows(conn, q, rows):
     return [(s, r) for s, _bm, r in scored]
 
 
-def cmd_search(args):
+_SEARCH_SELECT = (
+    "SELECT id, path, title, tags, category, confidence, hits, status, summary, verified_at, "
+    "secret, type, pinned, updated_at, applies_to FROM entries WHERE status='active'"
+)
+
+
+def search_items(q, limit=10, category=None, tag=None, device="all", bump_hits=True):
+    """检索核心：CLI（cmd_search）与 daemon（_daemon_search）共用同一套排序。
+
+    2026-10-26 抽出：此前 daemon.py 复制粘贴了一份旧检索逻辑，改 CLI 不生效。
+    """
     conn = get_conn()
     init_schema(conn)
     conn = rebuild_if_empty(conn)
-    q = (args.query or "").strip()
-    limit = args.limit
-    sql = "SELECT id, path, title, tags, category, confidence, hits, status, summary, verified_at, secret, type, pinned, updated_at FROM entries WHERE status='active'"
+    q = (q or "").strip()
+    sql = _SEARCH_SELECT
     params = []
-    if args.category:
+    if category:
         sql += " AND category=?"
-        params.append(args.category)
-    if args.tag:
+        params.append(category)
+    if tag:
         sql += " AND tags LIKE ?"
-        params.append(f"%{args.tag}%")
+        params.append(f"%{tag}%")
     rows = conn.execute(sql, params).fetchall()
     scored = _rank_rows(conn, q, rows)
-    # v2.2 设备过滤：--device local 只看本机专属+global+未知来源；--device <name> 看指定设备
-    local_dev = get_device_name()
-    dev_filter = getattr(args, "device", None) or "all"
-    if dev_filter != "all":
-        want = local_dev if dev_filter == "local" else dev_filter
+    # v2.2 设备过滤：local 只看本机专属+global+未知来源；<name> 看指定设备
+    if device and device != "all":
+        want = get_device_name() if device == "local" else device
         kept = []
         for s, r in scored:
-            scope, dv = _device_view(r[3])  # r[3]=tags
+            scope, dv = _device_view(r[3])          # r[3] = tags
             if scope == "scope:device" and dv not in ("", want):
-                continue  # 他机专属，过滤
+                continue
             kept.append((s, r))
         scored = kept
     out = []
@@ -940,9 +964,10 @@ def cmd_search(args):
             "category": r[4], "confidence": r[5], "hits": r[6],
             "status": r[7], "summary": r[8], "verified_at": r[9], "secret": bool(r[10]),
             "type": r[11], "score": round(score, 1),
+            "applies_to": (r[14] if len(r) > 14 else "") or "",
         })
-    # P1：检索命中即计访问（此前仅 get 计数，导致排序/预热用的 hits 几乎恒为 0）
-    if out:
+    # P1：检索命中即计访问（此前仅 get 计数，排序/预热用的 hits 几乎恒为 0）
+    if out and bump_hits:
         ids = [it["id"] for it in out]
         try:
             conn.execute(
@@ -951,8 +976,16 @@ def cmd_search(args):
             )
             conn.commit()
         except sqlite3.Error:
-            pass    # 审计计分失败不影响检索
+            pass    # 计分失败不影响检索结果
     conn.close()
+    return out
+
+
+def cmd_search(args):
+    q = (args.query or "").strip()
+    out = search_items(q, limit=args.limit, category=args.category, tag=args.tag,
+                       device=getattr(args, "device", None) or "all")
+    local_dev = get_device_name()      # 输出端设备标注用
 
     # Q8: synthesize 综合检索（冷路径，LLM；强制来源标注）
     if args.synthesize:
@@ -1010,6 +1043,8 @@ def cmd_search(args):
             print(f"       (敏感条目，正文已隐藏；get 需 --force)")
         elif it["summary"]:
             print(f"       {it['summary'][:60]}")
+        if it.get("applies_to"):
+            print(f"       ⚠适用边界: {it['applies_to']}")
         print(f"       path={it['path']}")
     return 0
 
@@ -1234,13 +1269,16 @@ def cmd_health(args):
                 conflicts_pending += 1
         except Exception:
             pass
-    conn.close()
     files = len(all_entry_files())
     print("===== AgentMemory 健康报告 (v2) =====")
     print(f"  记忆条目总数 : {files} (索引 {total})")
     print(f"  活跃条目     : {active} | 失效 {invalidated} | 归档(索引外)")
     print(f"  钉住常驻     : {pinned} | 敏感标记 {secret}")
     print(f"  累计命中次数 : {total_hits}")
+    never = conn.execute(
+        "SELECT count(*) FROM entries WHERE status='active' AND COALESCE(hits,0)=0").fetchone()[0]     
+    print(f"  从未被检索   : {never}/{active} 条活跃条目（占 {never*100//max(1,active)}%；"
+          f"检索命中现会计数，可据此判断哪些记忆是死重）")
     print(f"  低置信度活跃 : {low_conf}")
     print(f"  当前设备     : {local_dev}")
     print(f"  同主题多版本 : {len(multi_groups)} 组（建议 archive 旧版或 --supersedes 收编）")
@@ -1252,6 +1290,10 @@ def cmd_health(args):
     print("  类型分布:")
     for t, n in by_type:
         print(f"    {t:<12} {n}")
+    try:
+        conn.close()
+    except Exception:
+        pass
     return 0
 
 def main():
@@ -1271,6 +1313,7 @@ def main():
     pa.add_argument("--auto", action="store_true", help="自动模式：永不交互（自动捕获用）")
     pa.add_argument("--supersedes", help="v2.1 更正流：被本条替代的旧条目 id/path（写入后自动标 invalidated+superseded_by）")
     pa.add_argument("--scope", choices=["scope:device", "scope:global"], help="v2.2 适用范围（缺省按正文环境特征自动推断）")
+    pa.add_argument("--applies", help="经验适用边界（如 \"Windows GBK 控制台\"），写入 frontmatter applies_to")
     pa.set_defaults(func=cmd_add)
 
     pc = sub.add_parser("capture", help="自动捕获（agent 会话中调用，--auto 语义）")
@@ -1286,6 +1329,7 @@ def main():
     pc.add_argument("--auto", action="store_true", help="自动模式：永不交互（默认即此语义）")
     pc.add_argument("--supersedes", help="v2.1 更正流：被本条替代的旧条目 id/path（写入后自动标 invalidated+superseded_by）")
     pc.add_argument("--scope", choices=["scope:device", "scope:global"], help="v2.2 适用范围（缺省按正文环境特征自动推断）")
+    pc.add_argument("--applies", help="经验适用边界（如 \"Windows GBK 控制台\"），写入 frontmatter applies_to")
     pc.set_defaults(func=cmd_capture)
 
     ps = sub.add_parser("search", help="检索记忆")

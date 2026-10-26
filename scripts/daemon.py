@@ -130,45 +130,12 @@ def _daemon_add(payload):
     return mt._write_entry(meta, body)
 
 def _daemon_search(q, limit=20, synthesize=False):
-    """进程内检索。返回 dict 列表。"""
-    conn = mt.get_conn(); mt.init_schema(conn)
-    sql = "SELECT id, path, title, tags, category, confidence, hits, status, summary, verified_at, secret, type FROM entries WHERE status='active'"
-    rows = conn.execute(sql).fetchall()
-    scored = []
-    try:
-        fts = conn.execute("SELECT rowid FROM entries_fts WHERE entries_fts MATCH ? LIMIT ?",
-                           (q.replace('"', ''), limit * 3)).fetchall()
-        fts_ids = {r[0] for r in fts}
-    except sqlite3.OperationalError:
-        fts_ids = None
-    try:
-        like_rows = conn.execute(
-            "SELECT rowid FROM entries_fts WHERE title LIKE ? OR body LIKE ? LIMIT ?",
-            (f"%{q}%", f"%{q}%", limit * 3)).fetchall()
-        like_ids = {r[0] for r in like_rows}
-    except sqlite3.OperationalError:
-        like_ids = None
-    for r in rows:
-        score = 0
-        if fts_ids is not None and r[0] in fts_ids:
-            score += 10
-        if like_ids is not None and r[0] in like_ids:
-            score += 4
-        if q.lower() in r[2].lower():
-            score += 5
-        if r[8] and q.lower() in r[8].lower():
-            score += 2
-        if score:
-            scored.append((score + r[6] * 0.1, r))
-    scored.sort(key=lambda x: -x[0])
-    conn.close()
-    out = []
-    for score, r in scored[:limit]:
-        out.append({"id": r[0], "path": r[1], "title": r[2], "tags": r[3],
-                    "category": r[4], "confidence": r[5], "hits": r[6],
-                    "status": r[7], "summary": r[8], "verified_at": r[9],
-                    "secret": bool(r[10]), "type": r[11], "score": round(score, 1)})
-    return out
+    """进程内检索。直接复用 memory_tool.search_items——单一真相源。
+
+    2026-10-26：此前这里复制粘贴了一份旧检索逻辑（整串 AND + LIKE），
+    导致 CLI 的检索改进在 HTTP 路径完全不生效，且两处逻辑会持续漂移。
+    """
+    return mt.search_items(q, limit=limit)
 
 
 def _daemon_get(entry_id, force=False):
