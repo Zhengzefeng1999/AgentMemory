@@ -34,3 +34,5 @@ daemon.out.log
 daemon.err.log
 .consolidate_state.json
 bank/
+# daemon 运行时日志（自动生成，不入库）
+daemon*.log
