@@ -32,6 +32,7 @@ v2.1 变更:
 import argparse
 import datetime
 import json
+import math
 import os
 import re
 import sqlite3
@@ -704,13 +705,213 @@ def cmd_capture(args):
         print(("✓ " + msg) if ok else ("⚠️ " + msg))
     return 0
 
+# ---------------- 检索：切词 + 多因子排序 ----------------
+# 2026-10-19 重写（参照 Hy-Memory 的 相关/新鲜/重要/访问 四因子思路，
+# 但把"语义相似"换成零成本的"词覆盖率 + bm25"，不引入向量库/LLM）。
+# 旧实现：FTS5 整串当 AND + LIKE 连续子串 → 多词不连续即零结果，
+#        trigram 对 2 字中文完全失效（实测 20 个真实查询 10 个零结果）。
+# 新实现：切词 → 三字组 OR 取候选（含 2 字词 LIKE 兜底）→ 覆盖率×bm25 → 四因子加权。
+
+_QUERY_SPLIT_RE = re.compile(r"[\s,\uff0c\u3001;\uff1b:\uff1a/|\\()\uff08\uff09\[\]\u3010\u3011{}<>\u300a\u300b\"'\u201c\u201d\u2018\u2019?\uff1f!\uff01\u3002.\u00b7~`@#$%^&*+=_\-]+")
+_CONF_VAL = {"high": 1.0, "medium": 0.6, "low": 0.3}
+
+
+def split_query(q):
+    """按空白/标点切词。连续中文不强行切（自然语言整句交给三字组部分匹配）。"""
+    return [t for t in _QUERY_SPLIT_RE.split((q or "").strip()) if t.strip()]
+
+
+def query_trigrams(term):
+    """term 的重叠三字组（trigram 索引可匹配的最小单位）。"""
+    term = (term or "").strip()
+    return [term[i:i + 3] for i in range(len(term) - 2)] if len(term) >= 3 else []
+
+
+def build_fts_query(terms):
+    """把词表转成 FTS5 查询串：各词三字组取并集（OR），实现"任一片段命中即候选"。"""
+    toks = []
+    for t in terms:
+        for tg in dict.fromkeys(query_trigrams(t)):
+            toks.append('"%s"' % tg.replace('"', ""))
+    return " OR ".join(toks)
+
+
+def _days_old(text):
+    """从 '2026-09-30' 或 '2026-09-30 16:08:05' 算距今天数；解析失败返回 999。"""
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", text or "")
+    if not m:
+        return 999
+    try:
+        d = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return 999
+    return max(0, (datetime.date.today() - d).days)
+
+
+def _trigram_weight(conn, tgs):
+    """按稀有度给三字组算权重：log(1 + N/(1+df))。
+
+    高频虚词片段（"多久""一次"）权重趋近 0，实义词片段（"记忆库""同步"）主导；
+    零 LLM、无需停用词表。仅对长句（>=6 字）的覆盖率计分用。
+    """
+    try:
+        total = conn.execute("SELECT count(*) FROM entries").fetchone()[0] or 1
+    except sqlite3.Error:
+        return {}
+    w = {}
+    for tg in dict.fromkeys(tgs):
+        try:
+            df = conn.execute(
+                "SELECT count(*) FROM entries_fts WHERE entries_fts MATCH ?", ('"%s"' % tg,)
+            ).fetchone()[0]
+        except sqlite3.OperationalError:
+            df = total
+        w[tg] = math.log(1.0 + total / (1.0 + df))
+    return w
+
+
+def _long_term_profile(conn, term):
+    """长句（>=6 字）的有效片段画像：2 字组 + 稀有度权重。
+
+    关键：库中完全不存在的片段（跨词碎片如"库多久""步到远"）直接剔除，
+    否则它们以 df=0 拿到最高权重、把分母揄大，真词组反而无法区分。
+    返回 ([(unit, weight)], 片段总数)。权重已归一化；片段总数为原始去重后总数
+    （含被剔除的 df=0 片段），用作"命中比例"门槛的分母——否则只剩一个常见片段时
+    归一化会把它的覆盖率拉成 100%。
+    """
+    t = (term or "").strip()
+    if len(t) < 6:
+        return [], 0
+    try:
+        total = conn.execute("SELECT count(*) FROM entries").fetchone()[0] or 1
+    except sqlite3.Error:
+        return [], 0
+    units = list(dict.fromkeys(t[i:i + 2] for i in range(len(t) - 1)))
+    prof = []
+    for u in units:
+        try:
+            df = conn.execute(
+                "SELECT count(*) FROM entries_fts WHERE title LIKE ? OR body LIKE ?",
+                ("%" + u + "%", "%" + u + "%"),
+            ).fetchone()[0]
+        except sqlite3.OperationalError:
+            df = 0
+        if df < 1:
+            continue
+        prof.append((u, math.log(1.0 + total / (1.0 + df))))
+    s = sum(w for _, w in prof)
+    return ([(u, w / s) for u, w in prof] if s else []), len(units)
+
+
+def _rank_rows(conn, q, rows):
+    """对已过滤行做多因子排序，返回 [(score, row)]；score 为 0-100 显示值。
+
+    final = 0.60×相关 + 0.25×新鲜 + 0.10×重要度 + 0.05×访问次数
+    相关 = 0.65×词覆盖率 + 0.35×bm25（归一化）
+    """
+    terms = split_query(q)
+    if not terms:
+        # 无查询词：保持原行为（按访问次数）
+        return sorted(((r[6] * 0.1, r) for r in rows), key=lambda x: -x[0])
+
+    allowed = {r[0] for r in rows}
+    strength = {}   # rowid -> bm25 强度（越大越相关）
+    fq = build_fts_query(terms)
+    if fq:
+        try:
+            for rid, sc in conn.execute(
+                "SELECT rowid, bm25(entries_fts) FROM entries_fts "
+                "WHERE entries_fts MATCH ? ORDER BY bm25(entries_fts) LIMIT 400", (fq,)
+            ):
+                if rid in allowed:
+                    strength[rid] = -float(sc)      # FTS5 bm25 越小越相关，取负
+        except sqlite3.OperationalError:
+            pass
+    # 短词兜底：2 字中文在 trigram 下无法匹配，走 LIKE（同时兜住整词精确命中）
+    for t in terms:
+        pat = "%" + t.replace("%", "").replace("_", "") + "%"
+        try:
+            for (rid,) in conn.execute(
+                "SELECT rowid FROM entries_fts WHERE title LIKE ? OR body LIKE ? LIMIT 400", (pat, pat)
+            ):
+                if rid in allowed:
+                    strength.setdefault(rid, 0.0)
+        except sqlite3.OperationalError:
+            pass
+    if not strength:
+        return []
+
+    # 只为候选取回标题/正文，算词覆盖率（不加载全库正文）
+    texts = {}
+    cand = list(strength.keys())
+    for i in range(0, len(cand), 400):
+        chunk = cand[i:i + 400]
+        for rid, ttl, bd in conn.execute(
+            "SELECT rowid, title, body FROM entries_fts WHERE rowid IN (%s)" % ",".join("?" * len(chunk)),
+            chunk,
+        ):
+            texts[rid] = ((ttl or "").lower(), (bd or "").lower())
+
+    lowered = [t.lower() for t in terms]
+    # 长句画像（2 字组稀有度权重）预热一次：lt -> (prof, 片段总数)
+    long_prof = {lt: _long_term_profile(conn, lt) for lt in lowered if len(lt) >= 6}
+    scored = []
+    for r in rows:
+        rid = r[0]
+        if rid not in strength:
+            continue
+        ttl, bd = texts.get(rid, ("", ""))
+        acc = 0.0
+        for lt in lowered:
+            if not lt:
+                continue
+            if lt in ttl:
+                acc += 1.2
+            elif lt in bd:
+                acc += 0.6
+            elif long_prof.get(lt) and long_prof[lt][0]:
+                # 自然语言整句：片段命中比例到达门槛才计分（标题命中比正文值钱）
+                prof, n_units = long_prof[lt]
+                matched_w, matched_n = 0.0, 0
+                for u, wgt in prof:
+                    if u in ttl:
+                        matched_w += wgt
+                        matched_n += 1
+                    elif u in bd:
+                        matched_w += wgt * 0.85
+                        matched_n += 1
+                # 门槛 25%（按稀有度加权）：只撞上一两个常见片段（如"存在"）的弱命中
+                # 仍会进来，但得分不高——靠上层"相关度偏低"告警提醒 agent 换措辞。
+                # 不用"命中片段数/总片段数"做门槛：会误杀真查询（实测
+                # "怎么查某站的实时水位" 只有 2/9 片段命中，却是正确结果）。
+                if matched_w >= 0.25:
+                    acc += 0.8 * min(1.0, matched_w)
+        if acc <= 0:
+            continue    # 无任何真实命中：不靠弱碎片凑数
+        coverage = min(1.0, acc / len(terms))
+
+        hits = r[6] or 0
+        days = _days_old(r[13] if len(r) > 13 else r[9])
+        recency = 0.9 ** (days / 30.0)
+        importance = min(1.0, _CONF_VAL.get(r[5], 0.6) + (0.2 if (len(r) > 12 and r[12]) else 0.0))
+        access = min(1.0, math.log1p(hits) / math.log1p(20))
+        # 相关性为主，新鲜/重要/访问只做放大器（0.75–1.15）。
+        # 不能把四因子直接相加：无意义查询里"最好的那一条"也会因新鲜度拿到高分。
+        mult = 0.75 + 0.25 * recency + 0.10 * importance + 0.05 * access
+        final = min(1.0, coverage * mult)
+        scored.append((round(final * 100, 1), strength.get(rid, 0.0), r))
+    # 覆盖率优先，同分再看 bm25 词权重、再看访问次数
+    scored.sort(key=lambda x: (-x[0], -x[1], -(x[2][6] or 0)))
+    return [(s, r) for s, _bm, r in scored]
+
+
 def cmd_search(args):
     conn = get_conn()
     init_schema(conn)
     conn = rebuild_if_empty(conn)
     q = (args.query or "").strip()
     limit = args.limit
-    sql = "SELECT id, path, title, tags, category, confidence, hits, status, summary, verified_at, secret, type FROM entries WHERE status='active'"
+    sql = "SELECT id, path, title, tags, category, confidence, hits, status, summary, verified_at, secret, type, pinned, updated_at FROM entries WHERE status='active'"
     params = []
     if args.category:
         sql += " AND category=?"
@@ -719,38 +920,7 @@ def cmd_search(args):
         sql += " AND tags LIKE ?"
         params.append(f"%{args.tag}%")
     rows = conn.execute(sql, params).fetchall()
-    scored = []
-    if q:
-        # 先试 FTS5（trigram 对 ≥3 字中文有效）
-        try:
-            fts = conn.execute("SELECT rowid FROM entries_fts WHERE entries_fts MATCH ? LIMIT ?",
-                               (q.replace('"', ''), limit * 3)).fetchall()
-            fts_ids = {r[0] for r in fts}
-        except sqlite3.OperationalError:
-            fts_ids = None
-        # LIKE 兜底（2 字中文查询 FTS 匹配不到；FTS5 表可直接 LIKE）
-        try:
-            like_rows = conn.execute(
-                "SELECT rowid FROM entries_fts WHERE title LIKE ? OR body LIKE ? LIMIT ?",
-                (f"%{q}%", f"%{q}%", limit * 3)).fetchall()
-            like_ids = {r[0] for r in like_rows}
-        except sqlite3.OperationalError:
-            like_ids = None
-        for r in rows:
-            score = 0
-            if fts_ids is not None and r[0] in fts_ids:
-                score += 10
-            if like_ids is not None and r[0] in like_ids:
-                score += 4
-            if q.lower() in r[2].lower():
-                score += 5
-            if r[8] and q.lower() in r[8].lower():
-                score += 2
-            if score:
-                scored.append((score + r[6] * 0.1, r))
-    else:
-        scored = [(r[6] * 0.1, r) for r in rows]
-    scored.sort(key=lambda x: -x[0])
+    scored = _rank_rows(conn, q, rows)
     # v2.2 设备过滤：--device local 只看本机专属+global+未知来源；--device <name> 看指定设备
     local_dev = get_device_name()
     dev_filter = getattr(args, "device", None) or "all"
@@ -771,6 +941,17 @@ def cmd_search(args):
             "status": r[7], "summary": r[8], "verified_at": r[9], "secret": bool(r[10]),
             "type": r[11], "score": round(score, 1),
         })
+    # P1：检索命中即计访问（此前仅 get 计数，导致排序/预热用的 hits 几乎恒为 0）
+    if out:
+        ids = [it["id"] for it in out]
+        try:
+            conn.execute(
+                "UPDATE entries SET hits=hits+1, last_accessed=? WHERE id IN (%s)" % ",".join("?" * len(ids)),
+                [now_str()] + ids,
+            )
+            conn.commit()
+        except sqlite3.Error:
+            pass    # 审计计分失败不影响检索
     conn.close()
 
     # Q8: synthesize 综合检索（冷路径，LLM；强制来源标注）
@@ -800,6 +981,10 @@ def cmd_search(args):
     if not out:
         print("(无匹配)")
         return 0
+    # 弱命中告警：词法检索无法证明"库中无此记忆"，分数很低时提示换措辞或用 synthesize
+    if out[0]["score"] < 50:
+        print(f"⚠️ 相关度偏低（最高 {out[0]['score']}）：词法未找到可确认的记忆，"
+              f"可能是措辞差异，建议换词重搜或加 --synthesize。")
     if multi_groups:
         print(f"⚠️ 检出 {len(multi_groups)} 组同主题多版本并存（最新已标 ✅，旧版建议 archive 或 --supersedes 收编）：")
         for g in multi_groups:
