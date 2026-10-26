@@ -116,9 +116,13 @@ python scripts/memory_tool.py capture --body "今天踩坑：Excel 打开大断�
 # 更正旧记忆（发现以前记错了：写更正 + 旧条自动标失效并指回，检索不再返回错误旧条）
 python scripts/memory_tool.py capture --body "更正：xxx 实际是 yyy" --supersedes lessons/failures/旧条目.md
 
-# 搜索（本地 FTS 零 token）/ 综合回答（LLM，结论带来源）
+# 记录经验适用边界（防照搬到不同环境）
+python scripts/memory_tool.py capture --body "GBK 控制台 print('✓') 会崩" --applies "Windows GBK 控制台"
+
+# 搜索（本地词法检索，零 token、零 LLM）
 python scripts/memory_tool.py search "水位基面"
-python scripts/memory_tool.py search "水位基面换算怎么做" --synthesize
+python scripts/memory_tool.py search "基面 换算 水位"        # 多词不连续也命中（不必词序相邻）
+python scripts/memory_tool.py search "水位基面换算怎么做" --synthesize   # 综合回答（LLM，结论带来源）
 
 # 读取全文（刷新 last_accessed；secret 需 --force）
 python scripts/memory_tool.py get bank/knowledge/xxx.md
