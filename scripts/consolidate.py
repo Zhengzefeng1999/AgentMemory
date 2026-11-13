@@ -30,15 +30,16 @@ SCRIPTS = os.path.join(ROOT, "scripts")
 sys.path.insert(0, SCRIPTS)
 
 from memory_tool import (  # noqa: E402
-    CATEGORY_DIRS, INDEX_DB, _utf8, all_entry_files, build_frontmatter,
-    entry_rel_path, get_conn, init_schema, load_config, now_str, parse_frontmatter,
-    rebuild_index, title_similarity,
+    BANK_DIR, CATEGORY_DIRS, INBOX_DIR, INDEX_DB, _utf8, all_entry_files, apply_usage_signals,
+    build_frontmatter, entry_rel_path, get_conn, init_schema, is_inbox, load_config, now_str,
+    parse_frontmatter, rebuild_index, title_similarity, usage_signals,
 )
 from security_rules import scan_text  # noqa: E402
 
 # 双信号参数（ADR-0003）
-STALE_UPDATED_DAYS = 90    # 未更新阈值
-STALE_READ_DAYS = 60       # 未读取阈值
+# 由 config.json 的 consolidate.stale_*_days 覆盖；缺省时用这里的兜底值。
+_DEFAULT_STALE_UPDATED = 90   # 未更新阈值
+_DEFAULT_STALE_READ = 60      # 未读取阈值
 
 
 def _load_env():
@@ -58,11 +59,17 @@ def _load_env():
 
 def collect_entries():
     entries = []
+    # 使用信号（hits/last_accessed）只在 INDEX.db 里（search/get 只 UPDATE 索引，不回写
+    # frontmatter）。不在这里注入的话，find_cold / find_stale 读到的 hits 恒为 0、
+    # last_accessed 恒为空 → 双信号衰减永不触发（2026-11-13 实测 find_cold 返回 0 条）。
+    signals = usage_signals(refresh=True)
     for fp in all_entry_files():
         with open(fp, encoding="utf-8") as f:
             text = f.read()
         meta, body = parse_frontmatter(text)
-        entries.append({"path": fp, "rel": entry_rel_path(fp), "meta": meta, "body": body})
+        rel = entry_rel_path(fp)
+        apply_usage_signals(meta, rel, signals)
+        entries.append({"path": fp, "rel": rel, "meta": meta, "body": body})
     return entries
 
 
@@ -145,11 +152,87 @@ def write_conflicts_md(dups, verbose=True):
     return n_groups
 
 
-def find_cold(entries, updated_days=STALE_UPDATED_DAYS, read_days=STALE_READ_DAYS):
+def promote_inbox(entries, verbose=True):
+    """收件箱提级：把 bank/inbox/ 下已消化的条目移进正式分类目录。
+
+    这是「ad-hoc 通道」的出口（借鉴 Codex 的 extensions/ad_hoc/notes → Phase2 吸收）：
+    agent 自动捕获先落 inbox，只有经过 consolidate 这一道才进 curated 层。
+
+    去重规则（零 LLM，热路径语义）：
+      - 正文指纹与 curated 条目完全相同 → 判为重复导入，inbox 副本删除并把来源记进
+        superseded_by 字段的对端不动（不做 destructive 覆盖，只在日志/CONFLICTS 里报）
+      - 标题与 curated 条目 2-gram 相似 ≥0.9 → **不提级**，写 conflicts 指过去，
+        留给人工 --supersedes 或 llm 模式裁决（避免多版本并存继续累积）
+      - 其余 → 移进对应 category 目录，stage 标记移除
+    """
+    curated = [e for e in entries if not is_inbox(e["rel"]) and e["meta"].get("status") == "active"]
+    stats = {"promoted": 0, "duplicate": 0, "conflict": 0}
+    if not os.path.isdir(INBOX_DIR):
+        return stats
+    for e in [x for x in entries if is_inbox(x["rel"])]:
+        if e["meta"].get("status") != "active":
+            continue
+        meta, body = e["meta"], e["body"]
+        dup = None
+        near = None
+        for c in curated:
+            if title_similarity(meta.get("title", ""), c["meta"].get("title", "")) >= 0.9:
+                near = c["rel"]
+                break
+        if near:
+            # 不静默并库，也不提级：记进 conflicts，等人工/LLM 裁决（ADR-0001/0006）
+            if near not in (meta.get("conflicts") or []):
+                meta["conflicts"] = list(meta.get("conflicts") or []) + [near]
+                with open(e["path"], "w", encoding="utf-8") as f:
+                    f.write(build_frontmatter(meta, body))
+            stats["conflict"] += 1
+            if verbose:
+                print(f"  [inbox 留观] {e['rel']} ≈ {near}（近同名，未提级）")
+            continue
+        sub = CATEGORY_DIRS.get(meta.get("category"), ("lessons/patterns", "模式"))[0]
+        dst_dir = os.path.join(BANK_DIR, sub)
+        os.makedirs(dst_dir, exist_ok=True)
+        dst = os.path.join(dst_dir, os.path.basename(e["path"]))
+        if os.path.exists(dst):
+            stats["duplicate"] += 1
+            continue
+        meta.pop("stage", None)
+        meta["updated_at"] = now_str()
+        with open(e["path"], "w", encoding="utf-8") as f:
+            f.write(build_frontmatter(meta, body))
+        os.replace(e["path"], dst)
+        curated.append({"path": dst, "rel": entry_rel_path(dst), "meta": meta, "body": body})
+        stats["promoted"] += 1
+        if verbose:
+            print(f"  [inbox→提级] {e['rel']} → {sub}/")
+    if verbose and any(stats.values()):
+        print(f"  收件箱: 提级 {stats['promoted']} / 近同名留观 {stats['conflict']} / 跳过 {stats['duplicate']}")
+    return stats
+
+
+def stale_thresholds():
+    """从 config.json 读双信号阈值（ADR-0003）。读不到时用兜底值。"""
+    cfg = load_config().get("consolidate", {})
+    try:
+        u = int(cfg.get("stale_updated_days", _DEFAULT_STALE_UPDATED))
+    except (TypeError, ValueError):
+        u = _DEFAULT_STALE_UPDATED
+    try:
+        r = int(cfg.get("stale_read_days", _DEFAULT_STALE_READ))
+    except (TypeError, ValueError):
+        r = _DEFAULT_STALE_READ
+    return u, r
+
+
+def find_cold(entries, updated_days=None, read_days=None):
     """双信号冷条目（ADR-0003）：长期未更新 且 长期未读取。
 
     返回 [{entry, updated_ago, read_ago}]。
     """
+    if updated_days is None or read_days is None:
+        u_def, r_def = stale_thresholds()
+        updated_days = u_def if updated_days is None else updated_days
+        read_days = r_def if read_days is None else read_days
     today = datetime.date.today()
     cold = []
     for e in entries:
@@ -277,6 +360,7 @@ def run_auto(verbose=True):
             f.write(build_frontmatter(meta, body))
         archived_old += 1
 
+    inbox_stats = promote_inbox(entries, verbose)
     rebuild_index(verbose=False)
     write_conflicts_md(dups, verbose=verbose)
 
@@ -290,8 +374,9 @@ def run_auto(verbose=True):
         print(f"  v1 过期归档  : {archived_old} 条")
         print(f"  模式统计    : {len(pats)} 个标签")
         print(f"  新增候选    : {new_cands}")
+        print(f"  收件箱提级  : {inbox_stats['promoted']} 条")
     return {"dups": len(dups), "decayed": len(cold), "archived": archived_decay + archived_old,
-            "candidates": len(new_cands)}
+            "candidates": len(new_cands), "inbox_promoted": inbox_stats["promoted"]}
 
 
 # ---- 安全网②：敏感补扫（ADR-0002 防线 2） ----
@@ -490,6 +575,32 @@ def run_report():
         print("  ⚠️ 命中率为 0：检索可能未被触发，检查 pi 集成")
 
 
+def refresh_summary(offline=True, verbose=True):
+    """刷新常驻蒸馏摘要 PRELOAD_SUMMARY.md（借鉴 Codex 的 memory_summary.md）。
+
+    - `--mode llm`：走 LLM 归并重写（冷路径，一次调用）
+    - `--mode auto`：仅在摘要缺失时用规则版补一份，保证会话启动永远有东西可注入；
+      已有摘要不动（规则版质量不如 LLM 版，不该每周用规则覆盖掉）
+    """
+    summ_path = os.path.join(ROOT, "PRELOAD_SUMMARY.md")
+    if offline and os.path.exists(summ_path):
+        if verbose:
+            print("  摘要: 已存在，规则模式跳过（用 --mode llm 重写）")
+        return None
+    try:
+        import build_summary
+    except ImportError as exc:
+        print(f"  ⚠️ 摘要模块不可用: {exc}")
+        return None
+    text = build_summary.build_summary(verbose=verbose, offline=offline)
+    if not text:
+        return None
+    build_summary.write_summary(text)
+    if verbose:
+        print(f"  摘要已写入: {summ_path}")
+    return summ_path
+
+
 def main():
     p = argparse.ArgumentParser(prog="consolidate")
     p.add_argument("--mode", choices=["auto", "llm"], default="auto")
@@ -503,6 +614,7 @@ def main():
         if args.mode == "llm":
             run_security_rescan()
             run_llm()
+        refresh_summary(offline=(args.mode != "llm"))
     return 0
 
 

@@ -43,6 +43,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 BANK_DIR = os.path.join(ROOT, "bank")
 INDEX_DB = os.path.join(BANK_DIR, "INDEX.db")
+# 受限沙箱（DSH workspace-write 等）里 bank/ 不可写：SQLite 建不出 INDEX.db-wal，
+# 读写都改道——读走 immutable 只读连接，写交给沙箱外的常驻 daemon（2026-10-28）。
+DAEMON_URL = os.environ.get("AGENTMEMORY_DAEMON_URL", "http://127.0.0.1:8123/memory")
+DAEMON_TIMEOUT = float(os.environ.get("AGENTMEMORY_DAEMON_TIMEOUT", "10"))
+_CONFINED = None   # None=未探测 / True=bank/ 不可写 / False=可写
 SCRIPTS = os.path.join(ROOT, "scripts")
 PRELOAD_PATH = os.path.join(ROOT, "PRELOAD.md")
 
@@ -139,9 +144,23 @@ def build_frontmatter(meta, body):
 
 # ---- 文件与索引 ----
 
+# ---- 收件箱（inbox）：agent 自动捕获的暂存区（借鉴 Codex 的 ad_hoc/notes 通道）----
+# 背景（2026-11-13）：capture --auto 直接写进 curated 层（knowledge/lessons/...），等于把
+# 「一次抽取」和「归并提炼」压成一步，噪声与多版本并存（health 报 20 组同主题多版本）都是
+# 这么来的。Codex 的做法是：agent 只能往 extensions/ad_hoc/notes/ 追加，合并时才提级。
+# 这里同理：capture 落 bank/inbox/（stage: inbox），consolidate 复查后才移进 curated 层。
+INBOX_SUB = "inbox"
+INBOX_DIR = os.path.join(BANK_DIR, INBOX_SUB)
+
+
+def is_inbox(rel):
+    """rel 是相对 bank/ 的路径。inbox 条目是原始捕获，不进 PRELOAD/摘要，但仍可检索。"""
+    return str(rel or "").replace("\\", "/").startswith(INBOX_SUB + "/")
+
+
 def all_entry_files(include_invalid=False):
     files = []
-    for sub in ("user", "projects", "knowledge", "lessons/failures", "lessons/corrections", "lessons/patterns"):
+    for sub in (INBOX_SUB, "user", "projects", "knowledge", "lessons/failures", "lessons/corrections", "lessons/patterns"):
         d = os.path.join(BANK_DIR, sub)
         if os.path.isdir(d):
             for fn in sorted(os.listdir(d)):
@@ -152,7 +171,158 @@ def all_entry_files(include_invalid=False):
 def entry_rel_path(fp):
     return os.path.relpath(fp, BANK_DIR).replace("\\", "/")
 
+# ---- 使用信号（hits / last_accessed）----
+# ADR-0003 的双信号（更新 + 读取）真实数据只存在索引里：search/get 命中时只 UPDATE
+# entries，从不回写 frontmatter（否则 600+ 文件反复改动、git 天天冲突）。因此任何
+# 「按使用频率排序 / 衰减」的消费者都必须从这里取；直接 parse_frontmatter 拿到的是恒为 0
+# 的死值（2026-11-13 实测：索引 417 条 hits>0，markdown 748 条 hits=0，导致 PRELOAD
+# 的「常用层」永远为空、consolidate.find_cold 永远返回 0 条 —— ADR-0003 从未生效过）。
+_USAGE_SIGNALS = None
+
+
+def usage_signals(refresh=False):
+    """从 INDEX.db 读 {rel_path: (hits, last_accessed)}。读不到时降级为空表并告警。"""
+    global _USAGE_SIGNALS
+    if _USAGE_SIGNALS is not None and not refresh:
+        return _USAGE_SIGNALS
+    out = {}
+    try:
+        conn = get_conn()
+        for rel, hits, la in conn.execute(
+                "SELECT path, COALESCE(hits, 0), COALESCE(last_accessed, '') FROM entries"):
+            if rel:
+                out[str(rel).replace("\\", "/")] = (int(hits or 0), str(la or ""))
+        conn.close()
+    except (sqlite3.Error, OSError) as exc:
+        print(f"   ⚠️ 使用信号读取失败（本次按 0 处理）: {exc}")
+    _USAGE_SIGNALS = out
+    return out
+
+
+def apply_usage_signals(meta, rel, signals=None):
+    """把索引里的真实 hits/last_accessed 覆盖进 frontmatter meta（原地修改并返回）。"""
+    sig = usage_signals() if signals is None else signals
+    hit = sig.get(rel)
+    if hit is None:
+        return meta
+    meta["hits"], la = hit
+    if la:
+        meta["last_accessed"] = la
+    return meta
+
+class _NullCursor:
+    """只读降级下的写语句占位游标（读侧不受影响）。"""
+
+    lastrowid = None
+    rowcount = 0
+
+    def fetchone(self):
+        return None
+
+    def fetchall(self):
+        return []
+
+    def fetchmany(self, *a):
+        return []
+
+    def __iter__(self):
+        return iter(())
+
+
+class _ReadOnlyConn:
+    """只读连接包装：SELECT/WITH/PRAGMA 透传 immutable 连接，其余写语句降级为空操作。
+
+    背景（2026-10-28）：agent 沙箱把工作区外目录设为只读时，SQLite 的 WAL 需要在 bank/
+    建 INDEX.db-wal/-shm，于是 ``PRAGMA journal_mode=WAL`` 直接抛
+    ``sqlite3.OperationalError: unable to open database file``；``mode=ro`` 同样失败，
+    只有 ``immutable=1`` 可用。写入改由常驻 daemon（沙箱外进程）代劳，见 _daemon_write。
+    """
+
+    _READ_HEADS = ("SELECT", "WITH", "PRAGMA", "EXPLAIN")
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    @classmethod
+    def _head(cls, sql):
+        s = (sql or "").strip()
+        return s.split(None, 1)[0].upper() if s else ""
+
+    def execute(self, sql, params=()):
+        if self._head(sql) in self._READ_HEADS:
+            return self._conn.execute(sql, params)
+        return _NullCursor()
+
+    def executemany(self, sql, seq):
+        if self._head(sql) in self._READ_HEADS:
+            return self._conn.executemany(sql, seq)
+        return _NullCursor()
+
+    def executescript(self, script):
+        return _NullCursor()
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def _probe_confined():
+    """探测 bank/ 是否可写；不可写时进入只读降级（结果缓存，进程内只探测一次）。"""
+    global _CONFINED
+    if _CONFINED is not None:
+        return _CONFINED
+    if not os.path.exists(INDEX_DB):
+        _CONFINED = False
+        return False
+    try:
+        conn = sqlite3.connect(INDEX_DB)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        finally:
+            conn.close()
+        _CONFINED = False
+    except sqlite3.OperationalError:
+        _CONFINED = True
+    return _CONFINED
+
+
+def daemon_call(payload, timeout=None):
+    """向常驻 daemon 发一条 JSON 命令；失败抛 RuntimeError，由调用方决定降级或报错。"""
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        DAEMON_URL, data=data, headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or DAEMON_TIMEOUT) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:   # URLError / HTTPError / 超时 / 坏 JSON
+        raise RuntimeError(f"daemon 不可用（{DAEMON_URL}）：{exc}") from exc
+
+
+def _refuse_write(cmdname, hint=""):
+    """受限沙箱下写会静默丢失（只读包装把 UPDATE 变空操作），宁可明确拒绝。"""
+    if not _probe_confined():
+        return False
+    print(f"❌ {cmdname} 需要直写 bank/（frontmatter + 索引），当前环境 bank/ 不可写。")
+    if hint:
+        print(f"   {hint}")
+    print("   可选：1) 在沙箱外终端执行该命令；2) 新增条目用 add/capture（自动走 daemon）。")
+    return True
+
+
 def get_conn():
+    """可写 → 常规 WAL 连接；受限沙箱 → immutable 只读包装（写语句自动空操作）。"""
+    if _probe_confined():
+        raw = sqlite3.connect(f"file:{INDEX_DB}?mode=ro&immutable=1", uri=True)
+        return _ReadOnlyConn(raw)
     conn = sqlite3.connect(INDEX_DB)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")  # WAL 下安全，减少 fsync（ADR-0004 性能）
@@ -511,6 +681,11 @@ def _resolve_entry_path(ref):
 
 def _apply_supersedes(old_ref, new_rel):
     """旧条目标记 invalidated + superseded_by=new_rel（ADR-0001 演化路径）。返回 (ok, msg)。"""
+    if _probe_confined():
+        return False, (
+            f"受限环境 bank/ 不可写：新条目已写入，旧条目 {old_ref} 需在沙箱外执行 "
+            f"update {old_ref} --invalidate --supersede {new_rel}"
+        )
     fp = _resolve_entry_path(old_ref)
     if not fp:
         return False, f"未找到被替代条目: {old_ref}"
@@ -549,9 +724,48 @@ def _build_meta(title, tags, category, confidence, source, secret, mtype, pinned
         meta["applies_to"] = applies_to    # 经验适用边界（不填则不写该字段，保持 frontmatter 精简）
     return meta
 
+def _daemon_write(meta, body):
+    """受限沙箱：把新增条目交给常驻 daemon 落盘（daemon 在沙箱外，能直写 bank/）。
+
+    走的是 daemon 的 add 通道（与 CLI 同一套 _write_entry 语义：类型推断、敏感拦截、
+    冲突记录），因此不会写出与 CLI 不同形状的条目。
+    """
+    payload = {
+        "cmd": "add",
+        "body": body,
+        "title": meta.get("title", ""),
+        "type": meta.get("type", ""),
+        "category": meta.get("category", ""),
+        "tags": ",".join(meta.get("tags") or []),
+        "confidence": meta.get("confidence", "medium"),
+        "source": meta.get("source", ""),
+        "secret": bool(meta.get("secret")),
+        "stage": meta.get("stage", INBOX_SUB),
+    }
+    try:
+        res = daemon_call(payload)
+    except RuntimeError as exc:
+        raise SystemExit(
+            f"{exc}\n写入需要能写 bank/ 的环境：先启动 daemon "
+            f"（`python {os.path.join(SCRIPTS, 'daemon.py')}`），或换到沙箱外终端执行。"
+        ) from exc
+    rel = (res or {}).get("path") or ""
+    if not rel:
+        raise SystemExit(f"daemon 未返回写入路径，写入失败：{res}")
+    return rel
+
+
 def _write_entry(meta, body):
-    """落盘 + 索引。返回 (rel_path, conn)。"""
-    sub = CATEGORY_DIRS.get(meta["category"], ("lessons/patterns", "模式"))[0]
+    """落盘 + 索引。返回 rel_path。受限沙箱下改由 daemon 落盘。
+
+    meta["stage"] == "inbox" → 落 bank/inbox/（暂存区），否则落 curated 的 category 目录。
+    """
+    if _probe_confined():
+        return _daemon_write(meta, body)
+    if meta.get("stage") == INBOX_SUB:
+        sub = INBOX_SUB
+    else:
+        sub = CATEGORY_DIRS.get(meta["category"], ("lessons/patterns", "模式"))[0]
     d = os.path.join(BANK_DIR, sub)
     os.makedirs(d, exist_ok=True)
     # 毫秒级时间戳 + 短随机串，防止同秒多次写入互相覆盖（v2 自动捕获高频写入）
@@ -697,6 +911,12 @@ def cmd_capture(args):
 
     meta = _build_meta(title, tags, category, args.confidence, args.source, secret, mtype, False,
                        getattr(args, "applies", "") or "")
+    # 收件箱通道：agent 自动捕获先落 bank/inbox/，由 consolidate 复查后提级进 curated 层。
+    # 直接进 curated 会把「抽取」和「归并」压成一步，噪声与多版本并存都是这么来的。
+    if getattr(args, "stage", None) == "curated":
+        meta["stage"] = "curated"
+    else:
+        meta["stage"] = INBOX_SUB
     # 热路径冲突检测：--auto 下仅提示不阻塞（ADR-0005）；v2.2 附正文指纹 + 演进引导
     conn = get_conn(); init_schema(conn)
     body_dups = find_body_dup(body, conn)
@@ -715,7 +935,9 @@ def cmd_capture(args):
         print(hint)
 
     rel = _write_entry(meta, body)
-    print(f"已捕获: {rel}  type={meta['type']} category={meta['category']}" + (" 🔒secret" if secret else ""))
+    stage_note = " (inbox，待 consolidate 提级)" if meta.get("stage") == INBOX_SUB else ""
+    print(f"已捕获: {rel}  type={meta['type']} category={meta['category']}"
+          + (" 🔒secret" if secret else "") + stage_note)
     sup_ref = getattr(args, "supersedes", None)
     if sup_ref:
         ok, msg = _apply_supersedes(sup_ref, rel)
@@ -983,8 +1205,24 @@ def search_items(q, limit=10, category=None, tag=None, device="all", bump_hits=T
 
 def cmd_search(args):
     q = (args.query or "").strip()
-    out = search_items(q, limit=args.limit, category=args.category, tag=args.tag,
-                       device=getattr(args, "device", None) or "all")
+    # 受限沙箱：索引是 immutable 快照（看不到未 checkpoint 的 WAL），优先问 daemon 取实时视图；
+    # daemon 不可用则回落本地只读（daemon 每次写完即关连接，WAL 无残留时可等价）。
+    out = None
+    if _probe_confined() and not args.category and not args.tag:
+        try:
+            out = daemon_call({"cmd": "search", "query": q, "limit": args.limit}).get("hits")
+        except RuntimeError:
+            out = None
+    if not out:
+        out = search_items(q, limit=args.limit, category=args.category, tag=args.tag,
+                           device=getattr(args, "device", None) or "all")
+    for it in out:   # daemon JSON 与本地字典同源，这里只补键防 KeyError
+        it.setdefault("verified_at", "")
+        it.setdefault("tags", "")
+        it.setdefault("type", "")
+        it.setdefault("summary", "")
+        it.setdefault("hits", 0)
+        it.setdefault("secret", False)
     local_dev = get_device_name()      # 输出端设备标注用
 
     # Q8: synthesize 综合检索（冷路径，LLM；强制来源标注）
@@ -1113,6 +1351,8 @@ def rebuild_if_empty(conn):
 
 def cmd_consolidate(args):
     """consolidate — 周整理入口（委托 scripts/consolidate.py）。独立进程 + 超时，永不挂起（ADR-0005 批处理路径）。"""
+    if _refuse_write("consolidate", "周整理会改写条目 frontmatter 与索引。"):
+        return 1
     import subprocess as sp
     script = os.path.join(SCRIPTS, "consolidate.py")
     if not os.path.exists(script):
@@ -1166,6 +1406,8 @@ def cmd_get(args):
     return 0
 
 def cmd_update(args):
+    if _refuse_write("update"):
+        return 1
     conn = get_conn()
     init_schema(conn)
     row = conn.execute("SELECT path FROM entries WHERE uid=? OR path=? LIMIT 1", (args.id, args.id)).fetchone()
@@ -1200,6 +1442,8 @@ def cmd_update(args):
     return 0
 
 def cmd_archive(args):
+    if _refuse_write("archive"):
+        return 1
     conn = get_conn()
     init_schema(conn)
     row = conn.execute("SELECT path FROM entries WHERE uid=? OR path=? LIMIT 1", (args.id, args.id)).fetchone()
@@ -1269,9 +1513,12 @@ def cmd_health(args):
                 conflicts_pending += 1
         except Exception:
             pass
+    inbox_n = conn.execute("SELECT COUNT(*) FROM entries WHERE path LIKE 'inbox/%'").fetchone()[0]
     files = len(all_entry_files())
     print("===== AgentMemory 健康报告 (v2) =====")
     print(f"  记忆条目总数 : {files} (索引 {total})")
+    if inbox_n:
+        print(f"  收件箱待提级 : {inbox_n} 条（bank/inbox/，跑 consolidate auto 提级）")
     print(f"  活跃条目     : {active} | 失效 {invalidated} | 归档(索引外)")
     print(f"  钉住常驻     : {pinned} | 敏感标记 {secret}")
     print(f"  累计命中次数 : {total_hits}")
@@ -1330,6 +1577,8 @@ def main():
     pc.add_argument("--supersedes", help="v2.1 更正流：被本条替代的旧条目 id/path（写入后自动标 invalidated+superseded_by）")
     pc.add_argument("--scope", choices=["scope:device", "scope:global"], help="v2.2 适用范围（缺省按正文环境特征自动推断）")
     pc.add_argument("--applies", help="经验适用边界（如 \"Windows GBK 控制台\"），写入 frontmatter applies_to")
+    pc.add_argument("--stage", choices=["inbox", "curated"], default="inbox",
+                    help="写入位置：inbox=收件箱（默认，由 consolidate 提级）/ curated=直接进正式库")
     pc.set_defaults(func=cmd_capture)
 
     ps = sub.add_parser("search", help="检索记忆")

@@ -32,7 +32,10 @@
 - **溯源标签（Provenance Tags）** - add/capture 写入时自动附加的两类机器标签：`project:<git 根目录名>`（从 cwd 向上找 .git，纯 stat）与 `agent:<来源>`（环境变量扫描）。非 git 目录不打 project 标签（杂目录名是噪声）。检索可用 `--tag project:xxx` 精确过滤。零 LLM 零子进程（ADR-0005/0006）。
 - **极简写入（Minimal Add）** - `add "一句话"` 零参数写入：title=首句、category/tags/type 自动推断。低置信时手动路径交互确认一次；自动捕获路径（--auto）永不交互。
 - **本地守护进程（Daemon）** - 常驻 HTTP 服务（默认 :8123），消灭每次 spawn 的首次 SQLite 提交开销（1127ms → ~10ms）。同时承载 PRELOAD 生成与飞书桥。
-- **PRELOAD 预热** - 两级预热：`pinned` 常驻条目 + 近 7 天动态条目，≤200 行，会话启动时注入。
+- **PRELOAD 索引** - 三级预热：`pinned` 常驻 + **常用（按真实 hits 排序）** + 近 7 天动态，≤200 行、≤14 KB。会话启动由扩展自动注入（见 ADR-0008）。
+- **常驻摘要（PRELOAD_SUMMARY）** - 蒸馏结论层：首行 `v1` + User Profile / User preferences / General Tips / What's in Memory，≤9 KB。由 `build_summary.py` 生成，是可丢弃的派生物；无论是否检索都整篇注入。
+- **收件箱（inbox）** - `bank/inbox/` 暂存区：`capture`/daemon `add` 默认落这里（`stage: inbox`），可检索但不进注入层；`consolidate auto` 复查后提级进正式分类目录，近同名则留观并写 `conflicts`。对应 Codex 的 `extensions/ad_hoc/notes/` 通道。
+- **使用信号（Usage Signal）** - `hits` / `last_accessed` 的真实值只存在于 `bank/INDEX.db`（写入侧不回写 frontmatter，避免 750 个文件反复改动）。任何排序/衰减逻辑必须走 `memory_tool.usage_signals()`，直接读 frontmatter 拿到的是恒为 0 的死值（2026-11-13 修复的正是这条）。
 
 ## 安全
 

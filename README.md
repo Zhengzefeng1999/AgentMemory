@@ -74,7 +74,10 @@
 | **三层安全网** | 写前拦截（Block 拒绝 / Mark 自动 secret）→ 周扫补检 → pre-commit 闸门 | ADR-0002 |
 | **双信号生命周期** | 更新 + 读取双信号决定冷热；衰减归档、使用复活 | ADR-0003 |
 | **本地 daemon** | 常驻 HTTP :8123，写入 ~100ms（v1 的 1.3s）；同时承载 PRELOAD + 飞书桥 | ADR-0004 |
-| **PRELOAD 预热** | pinned 常驻 + 近 7 天动态，≤200 行，会话启动注入 | ADR-0004 |
+| **PRELOAD 索引** | pinned 常驻 + **常用（按真实 hits 排序）** + 近 7 天动态，≤200 行 / ≤14 KB | ADR-0004 / 0008 |
+| **常驻摘要** | `PRELOAD_SUMMARY.md`：`v1` + User Profile / preferences / General Tips / What's in Memory，≤9 KB，pi 扩展每轮自动注入 | ADR-0008 |
+| **收件箱 inbox** | `capture`/daemon `add` 默认落 `bank/inbox/`，可检索不进注入层，`consolidate auto` 复查后提级 | ADR-0008 |
+| **使用信号** | hits/last_accessed 真实值只在 `INDEX.db`，排序/衰减统一走 `usage_signals()` | ADR-0003 / 0008 |
 | **综合检索** | `search --synthesize`：LLM 回答强制带 `[来源:path]`，无记录明说 | ADR-0005 |
 | **Skill 草稿** | CANDIDATES 命中 → 自动生成 SKILL.md 草稿（candidates/），人工启用 | ADR-0001 |
 | **溯源标签** | add/capture 自动附加 `project:<git根目录>` + `agent:<来源>`，检索 `--tag project:xxx` 精确过滤；零子进程零 LLM | ADR-0006 |
@@ -92,6 +95,7 @@ AgentMemory\
   config.json            ← 配置（daemon/synthesize/consolidate/feishu）
   .env                   ← LLM key（gitignore，勿提交）
   PRELOAD.md             ← 预热索引（自动生成，gitignore）
+  PRELOAD_SUMMARY.md     ← 常驻蒸馏摘要（自动生成，gitignore）
   bank\                  ← ★ 记忆库（git 仓库，真相所在）
     user\ profile.md     ← 用户身份、偏好
     projects\ *.md       ← 项目上下文
@@ -104,7 +108,8 @@ AgentMemory\
   scripts\               ← 纯 Python 标准库工具
     memory_tool.py       ← add/capture/search/get/update/archive/list/health/consolidate
     daemon.py            ← 本地常驻服务（快速写入 + PRELOAD + 飞书桥）
-    build_preload.py     ← PRELOAD 预热生成器（pinned + 近 7 天）
+    build_preload.py     ← PRELOAD 索引生成器（pinned + 常用 + 近 7 天）
+    build_summary.py     ← 常驻摘要生成器（LLM 冷路径，失败降级规则版）
     infer.py             ← 类型/分类/tags 启发式推断（热路径零 LLM）
     security_rules.py    ← 敏感规则库（Block/Mark 两级，三层防线共用）
     consolidate.py       ← 周整理：双信号衰减/去重/补扫/冲突/草稿
@@ -152,8 +157,9 @@ python scripts/memory_tool.py update <path> --type fact --pin true --invalidate 
 python scripts/daemon.py --port 8123
 curl -X POST http://127.0.0.1:8123/memory -H "Content-Type: application/json" -d '{"cmd":"add","body":"...","auto":true}'
 
-# PRELOAD 预热（会话启动时生成并读取）
-python scripts/build_preload.py && type PRELOAD.md
+# 注入层（会话启动由 pi 扩展自动完成，一般不用手动跑）
+python scripts/build_summary.py        # 常驻摘要（--offline 只出规则版）
+python scripts/build_preload.py        # 预热索引
 
 # 每周整理（auto=规则零成本；llm=提炼/冲突/补扫/草稿）
 # v2.1 起从 memory_tool 统一入口进（subprocess+超时，永不挂起）
@@ -167,7 +173,8 @@ python scripts/memory_tool.py consolidate --mode llm
 
 - `consolidate.llm` — 周整理 LLM（DeepSeek，key 放 `.env` 的 `DEEPSEEK_API_KEY`）
 - `synthesize.llm` — 综合检索 LLM（可复用同一 key）
-- `daemon` — 端口 / PRELOAD 预算（默认 :8123 / 200 行 / 7 天）
+- `daemon` — 端口 / PRELOAD 预算（默认 :8123 / 200 行 / 7 天）；摘要预算走环境变量
+  `AGENTMEMORY_SUMMARY_BUDGET_BYTES`（默认 9000）、`AGENTMEMORY_INJECT_INDEX=0` 只注入摘要
 - `feishu` — 飞书桥（app_id / app_secret / chat_id；配好后 `daemon --with-bridge` 启用，飞书里发 `记：xxx` / `查：xxx`）
 
 ## 安全说明（三道防线，ADR-0002）

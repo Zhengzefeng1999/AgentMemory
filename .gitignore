@@ -36,3 +36,7 @@ daemon.err.log
 bank/
 # daemon 运行时日志（自动生成，不入库）
 daemon*.log
+# 每日同步日志（daily-sync.bat 生成，不入库）
+sync.log
+# 蒸馏摘要（派生物，可随时重建；含个人画像，不入公开库）
+PRELOAD_SUMMARY.md

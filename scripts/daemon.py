@@ -121,6 +121,8 @@ def _daemon_add(payload):
     secret = bool(payload.get("secret")) or bool(mark_msg)
     meta = mt._build_meta(title, tags, category, payload.get("confidence", "medium"),
                           payload.get("source"), secret, mtype, False)
+    # 收件箱通道：默认落 bank/inbox/，由 consolidate 提级（与 CLI capture 语义一致）
+    meta["stage"] = payload.get("stage") or mt.INBOX_SUB
     # 冲突检测：记录但不阻塞（自动路径，ADR-0005）
     conn = mt.get_conn(); mt.init_schema(conn)
     conflicts = mt.find_local_conflicts(title, body, conn)
