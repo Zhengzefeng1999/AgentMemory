@@ -96,3 +96,21 @@
   `consolidate auto` 清理积压，`health` 可见积压数
 - 双信号衰减从「从未触发」变成真的会降级/归档。首次触发时会有一批条目批量降 confidence，
   属于预期行为，不是 bug
+
+## 追加（2026-11-14）：摘要刷新改为定时任务
+
+`PRELOAD_SUMMARY.md` 是派生物，只有被重新生成才有价值。原来靠人记得手动跑，实际上没人会跑
+（实证：`insights-*.md` 从 2026-08-11 之后就没再产出）。改为计划任务 `AgentMemory-summary-refresh`：
+
+- **触发**：每天 08:30，`StartWhenAvailable`（笔记本常见关机，错过就在下次开机补跑）
+- **脚本**：`scripts/refresh-summary.bat` → `build_summary.py --if-stale` + `build_preload.py`
+- **幂等跳过**：`is_stale()` 判定「有条目文件比摘要新」或「摘要超过 14 天」，否则什么都不做。
+  安静的日子零成本，且**注入文本不churn**（LLM 每次措辞都不同，天天重算 = provider 前缀缓存天天失效）
+- **不把 INDEX.db 纳入 stale 判定**：每次 search/get 都 UPDATE hits，它的 mtime 天天在变，
+  拿它当信号等于每天必重建
+- **LLM 不可用时保留旧摘要**（不再降级覆盖）。规则版质量明显低于 LLM 版，定时任务遇到断网/
+  额度用尽就静默保留，等下次有网再说。要强制出规则版用 `--offline`
+- **日志**：`summary.log`（>512 KB 自动重置，gitignore）；任务超时上限 15 分钟
+- **注册**：`powershell -ExecutionPolicy Bypass -File scripts/register-summary-task.ps1`（幂等，`-Force` 覆盖）
+
+纯 ASCII 约束：`.bat` 由 cmd.exe 按 OEM 代码页读取，中文注释会乱码甚至改坏命令；`.ps1` 同理保持 ASCII。

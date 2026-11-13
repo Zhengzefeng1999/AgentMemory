@@ -194,7 +194,35 @@ def main():
         inbox_files = [f for f in os.listdir(os.path.join(bank, "inbox"))]
         check("留观条目没被移除", any("005-dup" in f for f in inbox_files), inbox_files)
 
-        print("⑦ stage 字段：curated 直写不落 inbox")
+        print("⑦ 摘要重建判定（定时任务 --if-stale）")
+        import time as _time
+        BS.write_summary(text)
+        check("刚写完不重建", BS.is_stale() is False)
+        _time.sleep(0.02)
+        make_entry(bank, "knowledge/20260106-000000-006-newer.md", "更新一条", "新条目比摘要新。")
+        check("有新条目 → 需要重建", BS.is_stale() is True)
+        BS.write_summary(text)
+        check("重建后回到不需要", BS.is_stale() is False)
+        # 索引 mtime 变动不该触发重建（search 每次都改 INDEX.db）
+        _time.sleep(0.02)
+        mt.usage_signals(refresh=True)
+        conn = mt.get_conn()
+        conn.execute("UPDATE entries SET hits=hits+1 WHERE path=?",
+                     ("knowledge/20260106-000000-006-newer.md",))
+        conn.commit()
+        conn.close()
+        check("仅 hits 变动不触发重建", BS.is_stale() is False)
+        # LLM 不可用时保留旧摘要，不用低质规则版覆盖
+        orig = BS._call_llm
+        BS._call_llm = lambda _p: None
+        try:
+            got = BS.build_summary(verbose=False, offline=False)
+            check("LLM 不可用时返回 None（保留旧文件）", got is None, got)
+            check("旧摘要仍然有效", BS._existing_summary_ok() is True)
+        finally:
+            BS._call_llm = orig
+
+        print("⑧ stage 字段：curated 直写不落 inbox")
         m_cur = mt._build_meta("直进正式库", ["scope:global"], "knowledge",
                                "medium", "test", False, "fact", False)
         m_cur["stage"] = "curated"

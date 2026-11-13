@@ -40,3 +40,5 @@ daemon*.log
 sync.log
 # 蒸馏摘要（派生物，可随时重建；含个人画像，不入公开库）
 PRELOAD_SUMMARY.md
+# 摘要刷新日志（refresh-summary.bat 生成，不入库）
+summary.log

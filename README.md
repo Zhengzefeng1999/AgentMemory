@@ -75,7 +75,7 @@
 | **双信号生命周期** | 更新 + 读取双信号决定冷热；衰减归档、使用复活 | ADR-0003 |
 | **本地 daemon** | 常驻 HTTP :8123，写入 ~100ms（v1 的 1.3s）；同时承载 PRELOAD + 飞书桥 | ADR-0004 |
 | **PRELOAD 索引** | pinned 常驻 + **常用（按真实 hits 排序）** + 近 7 天动态，≤200 行 / ≤14 KB | ADR-0004 / 0008 |
-| **常驻摘要** | `PRELOAD_SUMMARY.md`：`v1` + User Profile / preferences / General Tips / What's in Memory，≤9 KB，pi 扩展每轮自动注入 | ADR-0008 |
+| **常驻摘要** | `PRELOAD_SUMMARY.md`：`v1` + User Profile / preferences / General Tips / What's in Memory，≤9 KB，pi 扩展每轮自动注入；**计划任务每天 08:30 自动刷新**（`--if-stale` 无变化跳过） | ADR-0008 |
 | **收件箱 inbox** | `capture`/daemon `add` 默认落 `bank/inbox/`，可检索不进注入层，`consolidate auto` 复查后提级 | ADR-0008 |
 | **使用信号** | hits/last_accessed 真实值只在 `INDEX.db`，排序/衰减统一走 `usage_signals()` | ADR-0003 / 0008 |
 | **综合检索** | `search --synthesize`：LLM 回答强制带 `[来源:path]`，无记录明说 | ADR-0005 |
@@ -109,7 +109,9 @@ AgentMemory\
     memory_tool.py       ← add/capture/search/get/update/archive/list/health/consolidate
     daemon.py            ← 本地常驻服务（快速写入 + PRELOAD + 飞书桥）
     build_preload.py     ← PRELOAD 索引生成器（pinned + 常用 + 近 7 天）
-    build_summary.py     ← 常驻摘要生成器（LLM 冷路径，失败降级规则版）
+    build_summary.py     ← 常驻摘要生成器（LLM 冷路径；LLM 挂了保留旧文件）
+    refresh-summary.bat  ← 定时任务入口（--if-stale + 重建索引）
+    register-summary-task.ps1 ← 注册 AgentMemory-summary-refresh 计划任务（幂等）
     infer.py             ← 类型/分类/tags 启发式推断（热路径零 LLM）
     security_rules.py    ← 敏感规则库（Block/Mark 两级，三层防线共用）
     consolidate.py       ← 周整理：双信号衰减/去重/补扫/冲突/草稿
@@ -157,9 +159,10 @@ python scripts/memory_tool.py update <path> --type fact --pin true --invalidate 
 python scripts/daemon.py --port 8123
 curl -X POST http://127.0.0.1:8123/memory -H "Content-Type: application/json" -d '{"cmd":"add","body":"...","auto":true}'
 
-# 注入层（会话启动由 pi 扩展自动完成，一般不用手动跑）
-python scripts/build_summary.py        # 常驻摘要（--offline 只出规则版）
+# 注入层（会话启动由 pi 扩展自动完成；以下仅调试/手动补跑时用）
+python scripts/build_summary.py        # 常驻摘要（--offline 强制规则版；--if-stale 无变化跳过）
 python scripts/build_preload.py        # 预热索引
+cmd /c scripts\refresh-summary.bat     # 定时任务同款：摘要(if-stale) + 索引
 
 # 每周整理（auto=规则零成本；llm=提炼/冲突/补扫/草稿）
 # v2.1 起从 memory_tool 统一入口进（subprocess+超时，永不挂起）

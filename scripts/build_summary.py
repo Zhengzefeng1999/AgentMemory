@@ -19,6 +19,7 @@ AgentMemory build_summary — 常驻蒸馏摘要（PRELOAD_SUMMARY.md）生成�
   python scripts/build_summary.py            # 生成/更新 PRELOAD_SUMMARY.md
   python scripts/build_summary.py --offline  # 强制规则摘要（不调 LLM）
   python scripts/build_summary.py --print    # 只打印，不写文件
+  python scripts/build_summary.py --if-stale --quiet   # 定时任务：无变化就跳过
 """
 import argparse
 import datetime
@@ -309,7 +310,46 @@ def _normalize(text):
     return out.rstrip() + "\n"
 
 
+def _existing_summary_ok():
+    """现有摘要是否有效（存在 + 首行 v1）。"""
+    try:
+        with open(SUMMARY_PATH, encoding="utf-8") as f:
+            return f.readline().strip() == SCHEMA_VERSION
+    except OSError:
+        return False
+
+
+# 兜底刷新周期：即使没有新条目，超过这么多天也重算一次——
+# hits/last_accessed 会漂移，影响「常用」证据的选取，但那种漂移不值得天天重算。
+STALE_MAX_DAYS = int(os.environ.get("AGENTMEMORY_SUMMARY_MAX_AGE_DAYS", "14"))
+
+
+def is_stale():
+    """摘要是否需要重建——用于定时任务跳过无变化的空跑。
+
+    判定：① 有任一条目文件比摘要新；② 摘要本身超过 STALE_MAX_DAYS 天。
+
+    **不把 INDEX.db 纳入判定**：每次 search/get 都会 UPDATE hits，INDEX.db 的 mtime
+    天天在变；拿它当信号等于每天必重建，而 LLM 每次措辞都不同 →
+    注入文本天天变 → provider 前缀缓存天天失效，纯亏。
+    """
+    try:
+        summ_mtime = os.path.getmtime(SUMMARY_PATH)
+    except OSError:
+        return True
+    if (datetime.datetime.now().timestamp() - summ_mtime) > STALE_MAX_DAYS * 86400:
+        return True
+    for fp in all_entry_files():
+        try:
+            if os.path.getmtime(fp) > summ_mtime:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def build_summary(verbose=True, offline=False):
+    """返回摘要正文；返回 None 表示「不写文件」（调用方应保留旧文件）。"""
     evidence, counts = collect_evidence()
     if not evidence:
         print("  ⚠️ 没有可用证据条目，跳过摘要")
@@ -319,11 +359,16 @@ def build_summary(verbose=True, offline=False):
         raw = _call_llm(_prompt(evidence, counts))
         text = _normalize(raw)
         if text is None:
-            print("  → 降级为规则摘要")
+            # LLM 失败时不能盲目降级：规则版质量明显低于 LLM 版，覆盖掉等于退化。
+            # 已有有效摘要 → 保留旧文件（定时任务最常见的场景：断网/额度用尽）。
+            if _existing_summary_ok():
+                print("  ⚠️ LLM 不可用，保留现有摘要不覆盖（要强制出规则版加 --offline）")
+                return None
+            print("  → 无现有摘要，降级为规则摘要")
     if text is None:
         text = _normalize(_fallback_summary(evidence, counts))
     if text is None:
-        print("  ❌ 规则摘要也不合法，放弃写入（保留旧文件）")
+        print("  ❌ 摘要不合法，放弃写入（保留旧文件）")
         return None
     if verbose:
         print(f"  摘要: {len(text.encode('utf-8'))} B / 预算 {SUMMARY_BUDGET} B"
@@ -340,11 +385,18 @@ def write_summary(text):
 
 def main():
     p = argparse.ArgumentParser(prog="build_summary")
-    p.add_argument("--offline", action="store_true", help="不调 LLM，用规则摘要")
+    p.add_argument("--offline", action="store_true", help="不调 LLM，用规则摘要（会覆盖现有摘要）")
     p.add_argument("--print", dest="do_print", action="store_true", help="只打印不落盘")
+    p.add_argument("--if-stale", dest="if_stale", action="store_true",
+                   help="库里没有比摘要更新的条目时直接跳过（定时任务用）")
+    p.add_argument("--quiet", action="store_true", help="静默（跳过时不打印）")
     args = p.parse_args()
     _utf8("")
-    text = build_summary(offline=args.offline)
+    if args.if_stale and not args.do_print and not is_stale():
+        if not args.quiet:
+            print("摘要已是最新（无更新的条目），跳过")
+        return 0
+    text = build_summary(offline=args.offline, verbose=not args.quiet)
     if not text:
         return 1
     if args.do_print:
